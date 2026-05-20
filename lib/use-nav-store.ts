@@ -83,8 +83,7 @@ export function useNavStore() {
         if (!res.ok || !result.success) {
           setSyncError('云端同步失败')
         }
-      } catch (err) {
-        console.log('[v0] Cloud sync failed:', err)
+      } catch {
         setSyncError('云端同步失败')
       } finally {
         setSyncing(false)
@@ -95,14 +94,12 @@ export function useNavStore() {
   useEffect(() => {
     async function loadFromCloud() {
       try {
-        console.log('[v0] Loading from cloud...')
         const token = getToken()
         const res = await fetch('/api/data', {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         })
         if (res.ok) {
           const cloudData = await res.json()
-          console.log('[v0] Cloud data received:', cloudData)
           
           if (cloudData.groups && Array.isArray(cloudData.groups)) {
             const isCloudDefault = cloudData.groups.every((g: Group) => 
@@ -114,22 +111,16 @@ export function useNavStore() {
               g.id.startsWith('default-')
             )
             
-            console.log('[v0] isCloudDefault:', isCloudDefault, 'isLocalDefault:', isLocalDefault)
-            
             if (isCloudDefault && !isLocalDefault) {
-              console.log('[v0] Cloud is default, local has real data - syncing local to cloud')
               syncToCloud(localData)
             } else if (!isCloudDefault) {
-              console.log('[v0] Cloud has real data - updating local')
               setGroupsState(cloudData.groups)
               saveGroupsLocal(cloudData.groups)
-            } else {
-              console.log('[v0] Both are default - keeping local')
             }
           }
         }
-      } catch (err) {
-        console.log('[v0] Load from cloud failed:', err)
+      } catch {
+        // Silent fail - use local data
       }
     }
     loadFromCloud()
