@@ -329,7 +329,7 @@ export function NavApp() {
 
       <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center">
         <p className="text-xs text-muted-foreground">
-          MiniNav v0.3 · 数据{store.syncing ? '同步中' : '已同步'} · <a href="https://github.com/gaodui409-crypto/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
+          MiniNav v0.3 · 数据{store.syncing ? '同步中' : store.syncError ? '同步失败' : '已同步'} · <a href="https://github.com/gaodui409-crypto/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
         </p>
       </footer>
 

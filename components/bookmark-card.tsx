@@ -93,6 +93,7 @@ export function BookmarkCard({
       ref={setNodeRef}
       style={style}
       className={`nav-card group relative flex items-center gap-3 rounded-xl bg-card p-3 select-none transition-all duration-200 cursor-pointer ${isDragging ? 'ring-2 ring-primary/40' : ''}`}
+      {...(adminMode ? { ...attributes, ...listeners } : {})}
       onClick={handleClick}
       role="link"
       tabIndex={0}
@@ -103,7 +104,6 @@ export function BookmarkCard({
           handleClick()
         }
       }}
-      {...(adminMode ? { ...attributes, ...listeners } : {})}
     >
       {/* Icon */}
       <div
