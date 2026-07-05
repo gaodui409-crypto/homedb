@@ -1,37 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import crypto from 'crypto'
-
-const TOKEN_EXPIRY_DAYS = 30
-
-// Create HMAC-signed stateless token
-function createToken(): string {
-  const secret = process.env.NAV_PASSWORD || 'secret'
-  const timestamp = Date.now().toString()
-  const hmac = crypto.createHmac('sha256', secret).update(timestamp).digest('hex')
-  return `${timestamp}.${hmac}`
-}
-
-// Verify HMAC token and check expiry
-function verifyToken(token: string): boolean {
-  const secret = process.env.NAV_PASSWORD || 'secret'
-  const parts = token.split('.')
-  if (parts.length !== 2) return false
-  
-  const [timestamp, providedHmac] = parts
-  const expectedHmac = crypto.createHmac('sha256', secret).update(timestamp).digest('hex')
-  
-  // Timing-safe comparison
-  if (!crypto.timingSafeEqual(Buffer.from(providedHmac), Buffer.from(expectedHmac))) {
-    return false
-  }
-  
-  // Check expiry (30 days)
-  const tokenTime = parseInt(timestamp, 10)
-  const now = Date.now()
-  const maxAge = TOKEN_EXPIRY_DAYS * 24 * 60 * 60 * 1000
-  
-  return now - tokenTime < maxAge
-}
+import { createToken, verifyToken, safeCompare } from '@/lib/server-auth'
 
 // POST: Login with password
 export async function POST(request: NextRequest) {
@@ -46,7 +14,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const inputPassword = body.password
 
-    if (inputPassword === password) {
+    if (typeof inputPassword === 'string' && safeCompare(inputPassword, password)) {
       const token = createToken()
       return NextResponse.json({ token })
     } else {
@@ -73,9 +41,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ valid: false }, { status: 401 })
   }
 
-  // Check if it's the special no-auth token - only valid when no password is set
+  // Old no-auth token is invalid once a password has been set
   if (token === 'no-auth-required') {
-    // Password is set but user has old no-auth token — reject it
     return NextResponse.json({ valid: false }, { status: 401 })
   }
 

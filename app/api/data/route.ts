@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { put, get } from '@vercel/blob'
+import { isRequestAuthorized } from '@/lib/server-auth'
 
 const BLOB_KEY = 'nav-data.json'
 
@@ -42,77 +43,65 @@ const DEFAULT_DATA = {
   ],
 }
 
-// Check if Blob is configured
 function isBlobConfigured(): boolean {
-  const configured = !!process.env.BLOB_READ_WRITE_TOKEN
-  console.log('[v0] Blob configured:', configured)
-  return configured
+  return !!process.env.BLOB_READ_WRITE_TOKEN
 }
 
-// GET: Read data from Vercel Blob
-export async function GET() {
-  console.log('[v0] GET /api/data called')
-  
+// GET: Read data from Vercel Blob (requires auth when a password is set)
+export async function GET(request: NextRequest) {
+  if (!isRequestAuthorized(request)) {
+    return NextResponse.json({ error: '未授权' }, { status: 401 })
+  }
+
   try {
-    const blobConfigured = isBlobConfigured()
-    
-    if (!blobConfigured) {
-      console.log('[v0] Blob not configured, returning default data')
+    if (!isBlobConfigured()) {
       return NextResponse.json(DEFAULT_DATA)
     }
 
-    // Read blob using get() for private store
-    console.log('[v0] Reading blob for key:', BLOB_KEY)
-    const result = await get(BLOB_KEY, { access: 'private' }).catch((err) => {
-      console.log('[v0] get() error (blob may not exist):', err?.message)
-      return null
-    })
-    
+    const result = await get(BLOB_KEY, { access: 'private' }).catch(() => null)
+
     if (!result || result.statusCode !== 200) {
-      console.log('[v0] Blob does not exist or error, returning default data')
       return NextResponse.json(DEFAULT_DATA)
     }
 
-    console.log('[v0] Blob found, reading content...')
-    
-    // Read the blob content using Response wrapper for stream
     const response = new Response(result.stream)
     const text = await response.text()
     const data = JSON.parse(text)
-    
-    console.log('[v0] Blob data fetched, groups count:', data?.groups?.length)
+
     return NextResponse.json(data)
   } catch (error) {
-    console.error('[v0] Error reading from Blob:', error)
+    console.error('Error reading from Blob:', error)
     return NextResponse.json(DEFAULT_DATA)
   }
 }
 
-// POST: Write data to Vercel Blob
+// POST: Write data to Vercel Blob (requires auth when a password is set)
 export async function POST(request: NextRequest) {
-  console.log('[v0] POST /api/data called')
-  
+  if (!isRequestAuthorized(request)) {
+    return NextResponse.json({ error: '未授权' }, { status: 401 })
+  }
+
   try {
-    const blobConfigured = isBlobConfigured()
-    
-    if (!blobConfigured) {
-      console.log('[v0] Blob not configured, skipping cloud save')
+    if (!isBlobConfigured()) {
       return NextResponse.json({ success: true, local: true, message: 'Blob not configured' })
     }
 
     const data = await request.json()
-    console.log('[v0] Data received, groups count:', data?.groups?.length)
-    
+
+    // Basic payload validation to avoid corrupting stored data
+    if (!data || !Array.isArray(data.groups)) {
+      return NextResponse.json({ success: false, error: '数据格式错误' }, { status: 400 })
+    }
+
     const result = await put(BLOB_KEY, JSON.stringify(data), {
       access: 'private',
       addRandomSuffix: false,
       allowOverwrite: true,
     })
 
-    console.log('[v0] Blob put successful, URL:', result.url)
     return NextResponse.json({ success: true, url: result.url })
   } catch (error) {
-    console.error('[v0] Error writing to Blob:', error)
+    console.error('Error writing to Blob:', error)
     return NextResponse.json(
       { success: false, error: error instanceof Error ? error.message : 'Failed to save data' },
       { status: 500 }

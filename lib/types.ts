@@ -7,6 +7,8 @@ export interface Bookmark {
   order: number
   pinned?: boolean // pinned to the quick-access bar
   icon?: string // custom icon URL (optional)
+  note?: string // user note / annotation (optional)
+  clicks?: number // click counter for "most visited"
 }
 
 export interface Group {
@@ -15,7 +17,13 @@ export interface Group {
   order: number
   color: string
   bookmarks: Bookmark[]
+  collapsed?: boolean // collapsed state, synced to cloud
 }
+
+export type BackgroundSetting =
+  | { type: 'none' }
+  | { type: 'color'; value: string }
+  | { type: 'image'; value: string }
 
 export interface NavData {
   groups: Group[]

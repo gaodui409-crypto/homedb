@@ -3,7 +3,7 @@
 import { useDroppable } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Plus, Pencil, Trash2, GripVertical } from 'lucide-react'
+import { Plus, Pencil, Trash2, GripVertical, ChevronDown } from 'lucide-react'
 import { BookmarkCard } from './bookmark-card'
 import type { Group, Bookmark } from '@/lib/types'
 
@@ -16,6 +16,8 @@ interface BookmarkGroupProps {
   onTogglePin: (groupId: string, bookmarkId: string) => void
   onEditGroup: (group: Group) => void
   onDeleteGroup: (groupId: string) => void
+  onToggleCollapse: (groupId: string) => void
+  onOpenBookmark: (bookmarkId: string) => void
 }
 
 // Sortable wrapper for the entire group section (for group reorder)
@@ -65,9 +67,12 @@ function BookmarkGroup({
   onTogglePin,
   onEditGroup,
   onDeleteGroup,
+  onToggleCollapse,
+  onOpenBookmark,
   dragHandleProps,
   isDragging,
 }: InternalGroupProps) {
+  const collapsed = !!group.collapsed
   const sortedBookmarks = [...group.bookmarks].sort((a, b) => a.order - b.order)
   const bookmarkIds = sortedBookmarks.map((b) => b.id)
 
@@ -98,15 +103,32 @@ function BookmarkGroup({
           </div>
         )}
 
-        {/* Color accent dot */}
-        <span
-          className="inline-block size-2.5 rounded-full flex-shrink-0"
-          style={{ backgroundColor: group.color }}
-        />
-
-        <h2 className="text-sm font-semibold text-foreground tracking-wide flex-1">
-          {group.name}
-        </h2>
+        {/* Collapse toggle: dot + name + chevron */}
+        <button
+          onClick={() => onToggleCollapse(group.id)}
+          className="flex items-center gap-2 flex-1 min-w-0 text-left group/collapse"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? `展开分组 ${group.name}` : `折叠分组 ${group.name}`}
+        >
+          <span
+            className="inline-block size-2.5 rounded-full flex-shrink-0"
+            style={{ backgroundColor: group.color }}
+          />
+          <h2 className="text-sm font-semibold text-foreground tracking-wide truncate">
+            {group.name}
+          </h2>
+          {collapsed && (
+            <span className="text-xs text-muted-foreground flex-shrink-0">
+              ({group.bookmarks.length})
+            </span>
+          )}
+          <ChevronDown
+            size={14}
+            className={`flex-shrink-0 text-muted-foreground opacity-0 group-hover/collapse:opacity-100 transition-all duration-200 ${
+              collapsed ? '-rotate-90 opacity-60' : ''
+            }`}
+          />
+        </button>
 
         {adminMode && (
           <div className="flex items-center gap-1 opacity-0 group-hover/header:opacity-100 transition-opacity">
@@ -130,8 +152,8 @@ function BookmarkGroup({
         )}
       </div>
 
-      {/* Bookmark Grid */}
-      <div ref={setDropRef}>
+      {/* Bookmark Grid - hidden when collapsed */}
+      <div ref={setDropRef} className={collapsed ? 'hidden' : undefined}>
         <SortableContext items={bookmarkIds} strategy={rectSortingStrategy}>
           {sortedBookmarks.length === 0 && !adminMode && (
             <p className="text-sm text-muted-foreground py-4 text-center">暂无书签</p>
@@ -145,6 +167,7 @@ function BookmarkGroup({
                 onEdit={(b) => onEditBookmark(group.id, b)}
                 onDelete={(id) => onDeleteBookmark(group.id, id)}
                 onTogglePin={(id) => onTogglePin(group.id, id)}
+                onOpen={onOpenBookmark}
               />
             ))}
 

@@ -6,13 +6,28 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 
 import { v4 as uuid } from 'uuid'
 
-import type { Group, Bookmark, Theme, NavData } from './types'
+import type { Group, Bookmark, Theme, NavData, BackgroundSetting } from './types'
 import { DEFAULT_DATA } from './default-data'
 
 const STORAGE_KEY = 'mininav_data'
 const THEME_KEY = 'mininav_theme'
 const TITLE_KEY = 'mininav_title'
 const TOKEN_KEY = 'mininav_token'
+const BG_KEY = 'mininav_bg'
+
+function loadBackground(): BackgroundSetting {
+  try {
+    const raw = localStorage.getItem(BG_KEY)
+    if (!raw) return { type: 'none' }
+    const parsed = JSON.parse(raw) as BackgroundSetting
+    if (parsed.type === 'color' || parsed.type === 'image' || parsed.type === 'none') {
+      return parsed
+    }
+    return { type: 'none' }
+  } catch {
+    return { type: 'none' }
+  }
+}
 
 function loadGroups(): Group[] {
   try {
@@ -55,6 +70,7 @@ export function useNavStore() {
   const [groups, setGroupsState] = useState<Group[]>(() => loadGroups())
   const [theme, setThemeState] = useState<Theme>(() => loadTheme())
   const [title, setTitleState] = useState<string>(() => loadTitle())
+  const [background, setBackgroundState] = useState<BackgroundSetting>(() => loadBackground())
   const [adminMode, setAdminMode] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -148,6 +164,11 @@ export function useNavStore() {
     localStorage.setItem(TITLE_KEY, t)
   }, [])
 
+  const setBackground = useCallback((bg: BackgroundSetting) => {
+    setBackgroundState(bg)
+    localStorage.setItem(BG_KEY, JSON.stringify(bg))
+  }, [])
+
   useEffect(() => {
     const html = document.documentElement
     html.classList.remove('theme-sepia', 'theme-dark')
@@ -188,7 +209,7 @@ export function useNavStore() {
   )
 
   const addBookmark = useCallback(
-    (groupId: string, name: string, url: string, icon?: string) => {
+    (groupId: string, name: string, url: string, icon?: string, note?: string) => {
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g
@@ -198,6 +219,7 @@ export function useNavStore() {
             url,
             order: g.bookmarks.length,
             icon: icon || undefined,
+            note: note?.trim() || undefined,
           }
           return { ...g, bookmarks: [...g.bookmarks, bm] }
         })
@@ -213,8 +235,10 @@ export function useNavStore() {
       name: string,
       url: string,
       icon?: string,
-      newGroupId?: string
+      newGroupId?: string,
+      note?: string
     ) => {
+      const noteVal = note?.trim() || undefined
       setGroups((prev) => {
         if (!newGroupId || newGroupId === groupId) {
           return prev.map((g) => {
@@ -222,7 +246,9 @@ export function useNavStore() {
             return {
               ...g,
               bookmarks: g.bookmarks.map((b) =>
-                b.id === bookmarkId ? { ...b, name, url, icon: icon || undefined } : b
+                b.id === bookmarkId
+                  ? { ...b, name, url, icon: icon || undefined, note: noteVal }
+                  : b
               ),
             }
           })
@@ -231,7 +257,7 @@ export function useNavStore() {
         const updated = prev.map((g) => {
           if (g.id === groupId) {
             const bm = g.bookmarks.find((b) => b.id === bookmarkId)
-            if (bm) movedBm = { ...bm, name, url, icon: icon || undefined }
+            if (bm) movedBm = { ...bm, name, url, icon: icon || undefined, note: noteVal }
             return { ...g, bookmarks: g.bookmarks.filter((b) => b.id !== bookmarkId) }
           }
           return g
@@ -294,6 +320,29 @@ export function useNavStore() {
     [setGroups]
   )
 
+  const recordClick = useCallback(
+    (bookmarkId: string) => {
+      setGroups((prev) =>
+        prev.map((g) => ({
+          ...g,
+          bookmarks: g.bookmarks.map((b) =>
+            b.id === bookmarkId ? { ...b, clicks: (b.clicks ?? 0) + 1 } : b
+          ),
+        }))
+      )
+    },
+    [setGroups]
+  )
+
+  const toggleGroupCollapsed = useCallback(
+    (groupId: string) => {
+      setGroups((prev) =>
+        prev.map((g) => (g.id === groupId ? { ...g, collapsed: !g.collapsed } : g))
+      )
+    },
+    [setGroups]
+  )
+
   const togglePinBookmark = useCallback(
     (groupId: string, bookmarkId: string) => {
       setGroups((prev) =>
@@ -345,6 +394,8 @@ export function useNavStore() {
         order: typeof b.order === 'number' ? b.order : bIndex,
         pinned: b.pinned ?? false,
         icon: b.icon || undefined,
+        note: b.note || undefined,
+        clicks: typeof b.clicks === 'number' ? b.clicks : undefined,
       }))
 
       return {
@@ -353,6 +404,7 @@ export function useNavStore() {
         order: typeof g.order === 'number' ? g.order : gIndex,
         color: groupColor,
         bookmarks: normalizedBookmarks,
+        collapsed: g.collapsed ?? false,
       }
     })
   }, [])
@@ -394,6 +446,7 @@ export function useNavStore() {
     groups,
     theme,
     title,
+    background,
     adminMode,
     syncing,
     syncError,
@@ -401,7 +454,10 @@ export function useNavStore() {
     retrySyncToCloud: () => syncToCloud(groups),
     setTheme,
     setTitle,
+    setBackground,
     setAdminMode,
+    recordClick,
+    toggleGroupCollapsed,
     addGroup,
     updateGroup,
     deleteGroup,
