@@ -1,8 +1,23 @@
 // Shared favicon + avatar helpers (deduplicated from card / quick-bar / modals)
 
+/** Hosts that never have a public favicon: IPv4/IPv6 addresses, localhost, single-word intranet names */
+export function isUnresolvableHost(url: string): boolean {
+  try {
+    const host = new URL(url.startsWith('http') ? url : `https://${url}`).hostname
+    if (host === 'localhost' || !host.includes('.')) return true
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return true // IPv4
+    if (host.startsWith('[') || /^[0-9a-f:]+$/i.test(host)) return true // IPv6
+    return false
+  } catch {
+    return true
+  }
+}
+
 /** Ordered favicon sources — try in sequence before falling back to letter avatar */
 export function getFaviconSources(url: string): string[] {
   try {
+    // IP addresses / intranet hosts: favicon services only return ugly placeholders — skip straight to letter avatar
+    if (isUnresolvableHost(url)) return []
     const domain = new URL(url).hostname
     return [
       `https://favicon.im/${domain}`,

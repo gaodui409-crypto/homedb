@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { getFaviconSources, getAvatarColor } from '@/lib/favicon'
+import { isBuiltinIcon, getBuiltinIcon } from '@/components/builtin-icons'
 
 interface FaviconImageProps {
   url: string
@@ -12,11 +13,17 @@ interface FaviconImageProps {
 }
 
 /**
- * Renders a bookmark icon with automatic multi-source favicon fallback:
- * custom icon -> favicon.im -> Google s2 -> DuckDuckGo -> letter avatar
+ * Renders a bookmark icon with automatic fallback chain:
+ * builtin icon -> custom icon URL -> favicon.im -> Google s2 -> DuckDuckGo -> letter avatar.
+ * IP / intranet hosts skip remote favicon services entirely (they only return placeholders).
  */
 export function FaviconImage({ url, name, customIcon, className = 'size-9 rounded-lg' }: FaviconImageProps) {
-  const sources = customIcon ? [customIcon, ...getFaviconSources(url)] : getFaviconSources(url)
+  const builtin = customIcon && isBuiltinIcon(customIcon) ? getBuiltinIcon(customIcon) : undefined
+  const sources = builtin
+    ? []
+    : customIcon
+      ? [customIcon, ...getFaviconSources(url)]
+      : getFaviconSources(url)
   const [srcIndex, setSrcIndex] = useState(0)
 
   // Reset when the bookmark changes
@@ -26,6 +33,19 @@ export function FaviconImage({ url, name, customIcon, className = 'size-9 rounde
 
   const exhausted = srcIndex >= sources.length
   const avatarColor = getAvatarColor(name)
+
+  // Builtin icon: tinted background + lucide icon
+  if (builtin) {
+    const { Icon } = builtin
+    return (
+      <div
+        className={`flex-shrink-0 overflow-hidden flex items-center justify-center ${className}`}
+        style={{ backgroundColor: `${avatarColor}22`, color: avatarColor }}
+      >
+        <Icon className="size-[55%]" strokeWidth={2} aria-hidden="true" />
+      </div>
+    )
+  }
 
   return (
     <div

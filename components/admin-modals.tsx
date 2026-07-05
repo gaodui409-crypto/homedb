@@ -1,8 +1,10 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { X, ExternalLink, ImageIcon, Paintbrush } from 'lucide-react'
 import { suggestNameFromUrl } from '@/lib/favicon'
+import { FaviconImage } from '@/components/favicon-image'
+import { BUILTIN_ICONS, BUILTIN_ICON_PREFIX, isBuiltinIcon } from '@/components/builtin-icons'
 import type { Bookmark, Group, BackgroundSetting } from '@/lib/types'
 
 // ── Shared overlay backdrop ──────────────────────────────────────────────
@@ -84,15 +86,6 @@ interface BookmarkModalProps {
   onClose: () => void
 }
 
-function getFaviconUrl(url: string) {
-  try {
-    const domain = new URL(url).hostname
-    return `https://favicon.im/${domain}`
-  } catch {
-    return ''
-  }
-}
-
 export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalProps) {
   const isEdit = !!state.bookmark
   const [name, setName] = useState(state.bookmark?.name ?? '')
@@ -100,12 +93,6 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
   const [icon, setIcon] = useState(state.bookmark?.icon ?? '')
   const [note, setNote] = useState(state.bookmark?.note ?? '')
   const [selectedGroupId, setSelectedGroupId] = useState(state.groupId)
-  const [faviconError, setFaviconError] = useState(false)
-  // Use custom icon if set, otherwise auto-detect favicon
-  const previewIconUrl = icon.trim() || getFaviconUrl(url)
-
-  // Reset favicon error when url changes
-  useEffect(() => { setFaviconError(false) }, [url])
 
   // Auto-suggest name from URL when name is still empty
   const handleUrlBlur = () => {
@@ -129,20 +116,13 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
         {/* Icon Preview */}
         {url && (
           <div className="flex items-center gap-3 p-3 rounded-xl bg-accent border border-border">
-            <div className="size-8 rounded-lg overflow-hidden flex items-center justify-center bg-primary/10 flex-shrink-0">
-              {!faviconError && previewIconUrl ? (
-                <img
-                  src={previewIconUrl}
-                  alt="网站图标"
-                  width={32}
-                  height={32}
-                  className="size-full object-contain"
-                  onError={() => setFaviconError(true)}
-                />
-              ) : (
-                <span className="text-primary text-xs font-bold">{name.charAt(0) || '?'}</span>
-              )}
-            </div>
+            <FaviconImage
+              key={`${url}|${icon}`}
+              url={url.startsWith('http') ? url : `https://${url}`}
+              name={name || '?'}
+              customIcon={icon.trim() || undefined}
+              className="size-8 rounded-lg"
+            />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{name || '网站名称'}</p>
               <p className="text-xs text-muted-foreground truncate">{url}</p>
@@ -194,14 +174,39 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
           />
         </FormField>
 
-        <FormField label="自定义图标 URL（可选）">
-          <input
-            className={inputCls}
-            type="text"
-            value={icon}
-            onChange={(e) => { setIcon(e.target.value); setFaviconError(false) }}
-            placeholder="留空则自动获取网站图标"
-          />
+        <FormField label="图标（可选）">
+          <div className="flex flex-col gap-2">
+            <div className="grid grid-cols-8 gap-1.5">
+              {BUILTIN_ICONS.map(({ id, label, Icon }) => {
+                const value = `${BUILTIN_ICON_PREFIX}${id}`
+                const selected = icon === value
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setIcon(selected ? '' : value)}
+                    className={`aspect-square flex items-center justify-center rounded-lg border transition-colors ${
+                      selected
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
+                    }`}
+                    title={label}
+                    aria-label={`内置图标 ${label}`}
+                    aria-pressed={selected}
+                  >
+                    <Icon size={15} />
+                  </button>
+                )
+              })}
+            </div>
+            <input
+              className={inputCls}
+              type="text"
+              value={isBuiltinIcon(icon) ? '' : icon}
+              onChange={(e) => setIcon(e.target.value)}
+              placeholder="或粘贴自定义图标 URL；都留空则自动获取 / 首字母配色"
+            />
+          </div>
         </FormField>
 
         <FormField label="所属分组">
