@@ -176,7 +176,7 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
 
         <FormField label="图标（可选）">
           <div className="flex flex-col gap-2">
-            <div className="grid grid-cols-8 gap-1.5">
+            <div className="grid grid-cols-7 gap-1.5">
               {BUILTIN_ICONS.map(({ id, label, Icon }) => {
                 const value = `${BUILTIN_ICON_PREFIX}${id}`
                 const selected = icon === value
