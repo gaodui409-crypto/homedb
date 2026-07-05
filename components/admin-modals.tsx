@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
-import { X, ExternalLink } from 'lucide-react'
-import type { Bookmark, Group } from '@/lib/types'
+import { useState, useEffect } from 'react'
+import { X, ExternalLink, ImageIcon, Paintbrush } from 'lucide-react'
+import { suggestNameFromUrl } from '@/lib/favicon'
+import type { Bookmark, Group, BackgroundSetting } from '@/lib/types'
 
 // ── Shared overlay backdrop ──────────────────────────────────────────────
 function Backdrop({ onClick }: { onClick: () => void }) {
@@ -79,7 +80,7 @@ export interface BookmarkModalState {
 interface BookmarkModalProps {
   state: BookmarkModalState
   groups: Group[]
-  onSave: (groupId: string, name: string, url: string, icon: string, newGroupId: string) => void
+  onSave: (groupId: string, name: string, url: string, icon: string, newGroupId: string, note: string) => void
   onClose: () => void
 }
 
@@ -97,6 +98,7 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
   const [name, setName] = useState(state.bookmark?.name ?? '')
   const [url, setUrl] = useState(state.bookmark?.url ?? '')
   const [icon, setIcon] = useState(state.bookmark?.icon ?? '')
+  const [note, setNote] = useState(state.bookmark?.note ?? '')
   const [selectedGroupId, setSelectedGroupId] = useState(state.groupId)
   const [faviconError, setFaviconError] = useState(false)
   // Use custom icon if set, otherwise auto-detect favicon
@@ -105,11 +107,19 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
   // Reset favicon error when url changes
   useEffect(() => { setFaviconError(false) }, [url])
 
+  // Auto-suggest name from URL when name is still empty
+  const handleUrlBlur = () => {
+    if (!name.trim() && url.trim()) {
+      const suggested = suggestNameFromUrl(url)
+      if (suggested) setName(suggested)
+    }
+  }
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || !url.trim()) return
     const finalUrl = url.startsWith('http') ? url : `https://${url}`
-    onSave(state.groupId, name.trim(), finalUrl, icon.trim(), selectedGroupId)
+    onSave(state.groupId, name.trim(), finalUrl, icon.trim(), selectedGroupId, note)
     onClose()
   }
 
@@ -167,8 +177,20 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
             type="text"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
+            onBlur={handleUrlBlur}
             placeholder="https://..."
             required
+          />
+        </FormField>
+
+        <FormField label="备注（可选）">
+          <textarea
+            className={`${inputCls} resize-none`}
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="例：公司内网需 VPN / 账号是工作邮箱"
+            maxLength={100}
           />
         </FormField>
 
@@ -346,6 +368,89 @@ interface ConfirmDeleteProps {
   message: string
   onConfirm: () => void
   onClose: () => void
+}
+
+// ── Background Settings Modal ────────────────────────────────────────────
+interface BackgroundModalProps {
+  current: BackgroundSetting
+  onSave: (bg: BackgroundSetting) => void
+  onClose: () => void
+}
+
+const BG_COLOR_PRESETS = [
+  { label: '雾蓝', value: '#EEF3F8' },
+  { label: '暖米', value: '#F6F1E7' },
+  { label: '薄荷', value: '#EDF5F0' },
+  { label: '浅灰', value: '#F0F0F2' },
+  { label: '墨蓝', value: '#12181F' },
+  { label: '碳黑', value: '#161616' },
+]
+
+export function BackgroundModal({ current, onSave, onClose }: BackgroundModalProps) {
+  const [imageUrl, setImageUrl] = useState(current.type === 'image' ? current.value : '')
+
+  return (
+    <ModalShell title="背景自定义" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <FormField label="纯色背景">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => { onSave({ type: 'none' }); onClose() }}
+              className={`h-9 px-3 rounded-lg border text-xs font-medium transition-colors ${
+                current.type === 'none'
+                  ? 'border-primary text-primary bg-primary/10'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
+              }`}
+            >
+              默认
+            </button>
+            {BG_COLOR_PRESETS.map((c) => (
+              <button
+                key={c.value}
+                type="button"
+                onClick={() => { onSave({ type: 'color', value: c.value }); onClose() }}
+                className={`size-9 rounded-lg border-2 transition-transform hover:scale-110 ${
+                  current.type === 'color' && current.value === c.value
+                    ? 'border-primary'
+                    : 'border-border'
+                }`}
+                style={{ backgroundColor: c.value }}
+                aria-label={`背景色 ${c.label}`}
+                title={c.label}
+              />
+            ))}
+          </div>
+        </FormField>
+
+        <FormField label="壁纸图片 URL">
+          <div className="flex gap-2">
+            <input
+              className={inputCls}
+              type="text"
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+              placeholder="https://... 图片地址"
+            />
+            <button
+              type="button"
+              disabled={!imageUrl.trim()}
+              onClick={() => { onSave({ type: 'image', value: imageUrl.trim() }); onClose() }}
+              className="flex items-center gap-1.5 px-3 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex-shrink-0"
+            >
+              <ImageIcon size={13} />
+              应用
+            </button>
+          </div>
+        </FormField>
+
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Paintbrush size={12} className="flex-shrink-0" />
+          背景设置保存在本设备浏览器中，不随云端同步
+        </p>
+      </div>
+    </ModalShell>
+  )
 }
 
 export function ConfirmDeleteModal({ message, onConfirm, onClose }: ConfirmDeleteProps) {

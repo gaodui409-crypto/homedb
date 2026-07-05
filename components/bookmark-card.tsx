@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Pencil, Trash2, Pin, PinOff } from 'lucide-react'
+import { Pencil, Trash2, Pin, PinOff, StickyNote } from 'lucide-react'
+import { FaviconImage } from './favicon-image'
+import { getDomain } from '@/lib/favicon'
 import type { Bookmark } from '@/lib/types'
 
 interface BookmarkCardProps {
@@ -12,40 +13,7 @@ interface BookmarkCardProps {
   onEdit: (bookmark: Bookmark) => void
   onDelete: (id: string) => void
   onTogglePin?: (id: string) => void
-}
-
-function getFaviconUrl(url: string): string {
-  try {
-    const domain = new URL(url).hostname
-    return `https://favicon.im/${domain}`
-  } catch {
-    return ''
-  }
-}
-
-function getFirstChar(name: string): string {
-  return name.trim().charAt(0).toUpperCase()
-}
-
-function getDomain(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return url
-  }
-}
-
-const AVATAR_COLORS = [
-  '#3B82F6', '#10B981', '#F59E0B', '#EF4444',
-  '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16',
-]
-
-function getAvatarColor(name: string): string {
-  let hash = 0
-  for (let i = 0; i < name.length; i++) {
-    hash = (hash * 31 + name.charCodeAt(i)) & 0xffffff
-  }
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length]
+  onOpen?: (id: string) => void
 }
 
 export function BookmarkCard({
@@ -54,12 +22,8 @@ export function BookmarkCard({
   onEdit,
   onDelete,
   onTogglePin,
+  onOpen,
 }: BookmarkCardProps) {
-  const [imgError, setImgError] = useState(false)
-  // Use custom icon if available, otherwise fallback to favicon
-  const iconUrl = bookmark.icon || getFaviconUrl(bookmark.url)
-  const avatarColor = getAvatarColor(bookmark.name)
-
   const {
     attributes,
     listeners,
@@ -85,6 +49,7 @@ export function BookmarkCard({
 
   const handleClick = () => {
     // Always open link, even in admin mode (edit via pencil icon only)
+    onOpen?.(bookmark.id)
     window.open(bookmark.url, '_blank', 'noopener,noreferrer')
   }
 
@@ -106,31 +71,31 @@ export function BookmarkCard({
       }}
     >
       {/* Icon */}
-      <div
-        className="flex-shrink-0 size-9 rounded-lg overflow-hidden flex items-center justify-center text-white text-sm font-semibold"
-        style={imgError || !iconUrl ? { backgroundColor: avatarColor } : undefined}
-      >
-        {!imgError && iconUrl ? (
-          <img
-            src={iconUrl}
-            alt={bookmark.name}
-            width={36}
-            height={36}
-            className="size-full object-contain"
-            onError={() => setImgError(true)}
-          />
-        ) : (
-          <span>{getFirstChar(bookmark.name)}</span>
-        )}
-      </div>
+      <FaviconImage
+        url={bookmark.url}
+        name={bookmark.name}
+        customIcon={bookmark.icon}
+        className="size-9 rounded-lg"
+      />
 
       {/* Text */}
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-card-foreground truncate leading-tight">
-          {bookmark.name}
-        </p>
+        <div className="flex items-center gap-1 min-w-0">
+          <p className="text-sm font-medium text-card-foreground truncate leading-tight">
+            {bookmark.name}
+          </p>
+          {bookmark.note && (
+            <span
+              className="flex-shrink-0 text-amber-500"
+              title={bookmark.note}
+              aria-label={`备注：${bookmark.note}`}
+            >
+              <StickyNote size={11} />
+            </span>
+          )}
+        </div>
         <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {getDomain(bookmark.url)}
+          {bookmark.note || getDomain(bookmark.url)}
         </p>
       </div>
 

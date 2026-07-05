@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react'
 import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
-  Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud,
+  Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, Paintbrush,
 } from 'lucide-react'
 import type { Theme, NavData } from '@/lib/types'
 
@@ -19,6 +19,7 @@ interface NavHeaderProps {
   onExport: () => void
   onImportFile: (data: NavData, fileName: string) => void
   onLogout?: () => void
+  onOpenBackground: () => void
 }
 
 const THEMES: { key: Theme; icon: React.ReactNode; label: string }[] = [
@@ -39,6 +40,7 @@ export function NavHeader({
   onExport,
   onImportFile,
   onLogout,
+  onOpenBackground,
 }: NavHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(title)
@@ -207,6 +209,16 @@ export function NavHeader({
                 />
               </>
             )}
+
+            {/* Background settings */}
+            <button
+              onClick={onOpenBackground}
+              className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="背景自定义"
+              aria-label="背景自定义"
+            >
+              <Paintbrush size={15} />
+            </button>
 
             {/* Theme switcher */}
             <div className="flex items-center rounded-lg border border-border overflow-hidden">
