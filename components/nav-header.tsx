@@ -5,7 +5,8 @@ import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
   Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, Paintbrush,
 } from 'lucide-react'
-import type { Theme, NavData } from '@/lib/types'
+import type { Theme } from '@/lib/types'
+import { importNavDataSchema, type ImportNavData } from '@/lib/nav-schema'
 
 interface NavHeaderProps {
   title: string
@@ -17,7 +18,7 @@ interface NavHeaderProps {
   onAdminToggle: () => void
   onAddGroup: () => void
   onExport: () => void
-  onImportFile: (data: NavData, fileName: string) => void
+  onImportFile: (data: ImportNavData, fileName: string) => void
   onLogout?: () => void
   onOpenBackground: () => void
 }
@@ -57,10 +58,15 @@ export function NavHeader({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (file.size > 1024 * 1024) {
+      alert('JSON 文件不能超过 1 MB。')
+      e.target.value = ''
+      return
+    }
     const reader = new FileReader()
     reader.onload = (ev) => {
       try {
-        const data: NavData = JSON.parse(ev.target?.result as string)
+        const data = importNavDataSchema.parse(JSON.parse(ev.target?.result as string))
         onImportFile(data, file.name)
       } catch {
         alert('JSON 文件解析失败，请检查格式。')

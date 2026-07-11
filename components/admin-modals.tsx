@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { X, ExternalLink, ImageIcon, Paintbrush } from 'lucide-react'
 import { suggestNameFromUrl } from '@/lib/favicon'
+import { normalizeHttpUrl } from '@/lib/nav-schema'
 import { FaviconImage } from '@/components/favicon-image'
 import { BUILTIN_ICONS, BUILTIN_ICON_PREFIX, isBuiltinIcon } from '@/components/builtin-icons'
 import type { Bookmark, Group, BackgroundSetting } from '@/lib/types'
@@ -93,6 +94,8 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
   const [icon, setIcon] = useState(state.bookmark?.icon ?? '')
   const [note, setNote] = useState(state.bookmark?.note ?? '')
   const [selectedGroupId, setSelectedGroupId] = useState(state.groupId)
+  const [formError, setFormError] = useState('')
+  const previewUrl = normalizeHttpUrl(url)
 
   // Auto-suggest name from URL when name is still empty
   const handleUrlBlur = () => {
@@ -105,8 +108,23 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || !url.trim()) return
-    const finalUrl = url.startsWith('http') ? url : `https://${url}`
-    onSave(state.groupId, name.trim(), finalUrl, icon.trim(), selectedGroupId, note)
+
+    const finalUrl = normalizeHttpUrl(url)
+    if (!finalUrl) {
+      setFormError('请输入有效的网址')
+      return
+    }
+
+    const iconValue = icon.trim()
+    const finalIcon = !iconValue || isBuiltinIcon(iconValue)
+      ? iconValue
+      : normalizeHttpUrl(iconValue)
+    if (finalIcon === null) {
+      setFormError('自定义图标必须是有效的网址')
+      return
+    }
+
+    onSave(state.groupId, name.trim(), finalUrl, finalIcon, selectedGroupId, note)
     onClose()
   }
 
@@ -114,11 +132,11 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
     <ModalShell title={isEdit ? '编辑书签' : '添加书签'} onClose={onClose}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         {/* Icon Preview */}
-        {url && (
+        {previewUrl && (
           <div className="flex items-center gap-3 p-3 rounded-xl bg-accent border border-border">
             <FaviconImage
               key={`${url}|${icon}`}
-              url={url.startsWith('http') ? url : `https://${url}`}
+              url={previewUrl}
               name={name || '?'}
               customIcon={icon.trim() || undefined}
               className="size-8 rounded-lg"
@@ -128,7 +146,7 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
               <p className="text-xs text-muted-foreground truncate">{url}</p>
             </div>
             <a
-              href={url.startsWith('http') ? url : `https://${url}`}
+              href={previewUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-muted-foreground hover:text-foreground transition-colors"
@@ -146,6 +164,7 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="例：GitHub"
+            maxLength={100}
             required
             autoFocus
           />
@@ -156,12 +175,18 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
             className={inputCls}
             type="text"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => {
+              setUrl(e.target.value)
+              setFormError('')
+            }}
             onBlur={handleUrlBlur}
             placeholder="https://..."
+            maxLength={2048}
             required
           />
         </FormField>
+
+        {formError && <p className="text-sm text-destructive">{formError}</p>}
 
         <FormField label="备注（可选）">
           <textarea
@@ -205,6 +230,7 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
               value={isBuiltinIcon(icon) ? '' : icon}
               onChange={(e) => setIcon(e.target.value)}
               placeholder="或粘贴自定义图标 URL；都留空则自动获取 / 首字母配色"
+              maxLength={2048}
             />
           </div>
         </FormField>
@@ -282,6 +308,7 @@ export function GroupModal({ state, onSave, onClose }: GroupModalProps) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="例：AI 工具"
+            maxLength={100}
             required
             autoFocus
           />

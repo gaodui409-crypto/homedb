@@ -31,7 +31,8 @@ import {
   ConfirmDeleteModal,
   BackgroundModal,
 } from '@/components/admin-modals'
-import type { Bookmark, Group, NavData } from '@/lib/types'
+import type { Bookmark, Group } from '@/lib/types'
+import type { ImportNavData } from '@/lib/nav-schema'
 
 type ModalState =
   | { type: 'none' }
@@ -41,7 +42,7 @@ type ModalState =
   | { type: 'editGroup'; group: Group }
   | { type: 'deleteBookmark'; groupId: string; bookmarkId: string; name: string }
   | { type: 'deleteGroup'; groupId: string; name: string }
-  | { type: 'importMode'; data: NavData; fileName: string }
+  | { type: 'importMode'; data: ImportNavData; fileName: string }
   | { type: 'background' }
 
 type ActiveDrag =
@@ -51,6 +52,7 @@ type ActiveDrag =
 
 export function NavApp() {
   const store = useNavStore()
+  const { adminMode, setAdminMode } = store
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
   const [activeDrag, setActiveDrag] = useState<ActiveDrag>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -117,12 +119,12 @@ export function NavApp() {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
         e.preventDefault()
-        store.setAdminMode(!store.adminMode)
+        setAdminMode(!adminMode)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [store.adminMode, store.setAdminMode])
+  }, [adminMode, setAdminMode])
 
   const handleDragStart = (event: DragStartEvent) => {
     const data = event.active.data.current
@@ -369,7 +371,7 @@ export function NavApp() {
 
       <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center">
         <p className="text-xs text-muted-foreground">
-          MiniNav v0.3 · 数据{store.syncing ? '同步中' : store.syncError ? '同步失败' : '已同步'} · <a href="https://github.com/gaodui409-crypto/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
+          MiniNav v0.4 · 数据{store.syncing ? '同步中' : store.syncError ? '同步失败' : '已同步'} · <a href="https://github.com/gaodui409-crypto/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
         </p>
       </footer>
 

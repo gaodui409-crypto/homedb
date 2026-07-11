@@ -8,6 +8,7 @@ import { v4 as uuid } from 'uuid'
 
 import type { Group, Bookmark, Theme, NavData, BackgroundSetting } from './types'
 import { DEFAULT_DATA } from './default-data'
+import { importNavDataSchema, navDataSchema, type ImportNavData } from './nav-schema'
 
 const STORAGE_KEY = 'mininav_data'
 const THEME_KEY = 'mininav_theme'
@@ -33,8 +34,8 @@ function loadGroups(): Group[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return DEFAULT_DATA
-    const parsed: NavData = JSON.parse(raw)
-    return parsed.groups ?? DEFAULT_DATA
+    const parsed = navDataSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data.groups : DEFAULT_DATA
   } catch {
     return DEFAULT_DATA
   }
@@ -75,37 +76,65 @@ export function useNavStore() {
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const pendingSyncRef = useRef<Group[] | null>(null)
+  const syncInFlightRef = useRef(false)
 
   const clearSyncError = useCallback(() => setSyncError(null), [])
 
-  const syncToCloud = useCallback((data: Group[]) => {
+  const flushCloudSync = useCallback(async () => {
+    if (syncInFlightRef.current) return
+
+    syncInFlightRef.current = true
+    setSyncing(true)
+
+    try {
+      while (pendingSyncRef.current) {
+        const data = pendingSyncRef.current
+        pendingSyncRef.current = null
+
+        try {
+          setSyncError(null)
+          const token = getToken()
+          const res = await fetch('/api/data', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ groups: data }),
+          })
+          const result = await res.json()
+          if (!res.ok || !result.success) {
+            throw new Error(result.error || 'Cloud sync failed')
+          }
+        } catch {
+          if (!pendingSyncRef.current) pendingSyncRef.current = data
+          setSyncError('云端同步失败')
+          break
+        }
+      }
+    } finally {
+      syncInFlightRef.current = false
+      setSyncing(false)
+    }
+  }, [])
+
+  const syncToCloud = useCallback((data: Group[], immediate = false) => {
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current)
     }
-    syncTimeoutRef.current = setTimeout(async () => {
-      try {
-        setSyncing(true)
-        setSyncError(null)
-        const token = getToken()
-        const res = await fetch('/api/data', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({ groups: data }),
-        })
-        const result = await res.json()
-        if (!res.ok || !result.success) {
-          setSyncError('云端同步失败')
-        }
-      } catch {
-        setSyncError('云端同步失败')
-      } finally {
-        setSyncing(false)
-      }
-    }, 500)
-  }, [])
+
+    const queueSync = () => {
+      pendingSyncRef.current = data
+      void flushCloudSync()
+    }
+
+    if (immediate) {
+      queueSync()
+    } else {
+      syncTimeoutRef.current = setTimeout(queueSync, 500)
+    }
+  }, [flushCloudSync])
 
   useEffect(() => {
     async function loadFromCloud() {
@@ -114,33 +143,37 @@ export function useNavStore() {
         const res = await fetch('/api/data', {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         })
-        if (res.ok) {
-          const cloudData = await res.json()
-          
-          if (cloudData.groups && Array.isArray(cloudData.groups)) {
-            const isCloudDefault = cloudData.groups.every((g: Group) => 
-              g.id.startsWith('default-')
-            )
-            
-            const localData = loadGroups()
-            const isLocalDefault = localData.every((g: Group) => 
-              g.id.startsWith('default-')
-            )
-            
-            if (isCloudDefault && !isLocalDefault) {
-              syncToCloud(localData)
-            } else if (!isCloudDefault) {
-              setGroupsState(cloudData.groups)
-              saveGroupsLocal(cloudData.groups)
-            }
-          }
+        if (!res.ok) {
+          throw new Error('Cloud data request failed')
+        }
+
+        const cloudData = await res.json()
+        const parsed = navDataSchema.safeParse(cloudData)
+        if (!parsed.success) {
+          throw new Error('Invalid cloud data')
+        }
+
+        const localData = loadGroups()
+        const isLocalDefault =
+          localData.length === DEFAULT_DATA.length &&
+          localData.every((group) => group.id.startsWith('default-'))
+
+        if (!cloudData.initialized && !isLocalDefault) {
+          syncToCloud(localData)
+        } else if (cloudData.initialized) {
+          setGroupsState(parsed.data.groups)
+          saveGroupsLocal(parsed.data.groups)
         }
       } catch {
-        // Silent fail - use local data
+        setSyncError('云端数据读取失败，当前使用本地数据')
       }
     }
     loadFromCloud()
   }, [syncToCloud])
+
+  useEffect(() => () => {
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current)
+  }, [])
 
   const setGroups = useCallback(
     (g: Group[] | ((prev: Group[]) => Group[])) => {
@@ -371,7 +404,7 @@ export function useNavStore() {
     URL.revokeObjectURL(url)
   }, [groups])
 
-  const normalizeImportData = useCallback((data: NavData): Group[] => {
+  const normalizeImportData = useCallback((data: ImportNavData): Group[] => {
     const defaultColors = [
       '#3B82F6',
       '#10B981',
@@ -383,11 +416,11 @@ export function useNavStore() {
       '#84CC16',
     ]
 
-    return (data.groups || []).map((g, gIndex) => {
+    return data.groups.map((g, gIndex) => {
       const groupId = g.id || uuid()
       const groupColor = g.color || defaultColors[gIndex % defaultColors.length]
 
-      const normalizedBookmarks: Bookmark[] = (g.bookmarks || []).map((b, bIndex) => ({
+      const normalizedBookmarks: Bookmark[] = (g.bookmarks ?? []).map((b, bIndex) => ({
         id: b.id || uuid(),
         name: b.name,
         url: b.url,
@@ -410,8 +443,9 @@ export function useNavStore() {
   }, [])
 
   const importData = useCallback(
-    (data: NavData, mode: 'overwrite' | 'merge') => {
-      const normalizedGroups = normalizeImportData(data)
+    (data: ImportNavData, mode: 'overwrite' | 'merge') => {
+      const parsed = importNavDataSchema.parse(data)
+      const normalizedGroups = normalizeImportData(parsed)
 
       if (mode === 'overwrite') {
         setGroups(normalizedGroups)
@@ -451,7 +485,7 @@ export function useNavStore() {
     syncing,
     syncError,
     clearSyncError,
-    retrySyncToCloud: () => syncToCloud(groups),
+    retrySyncToCloud: () => syncToCloud(groups, true),
     setTheme,
     setTitle,
     setBackground,

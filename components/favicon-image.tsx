@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { getFaviconSources, getAvatarColor } from '@/lib/favicon'
 import { isBuiltinIcon, getBuiltinIcon } from '@/components/builtin-icons'
 
@@ -24,12 +24,9 @@ export function FaviconImage({ url, name, customIcon, className = 'size-9 rounde
     : customIcon
       ? [customIcon, ...getFaviconSources(url)]
       : getFaviconSources(url)
-  const [srcIndex, setSrcIndex] = useState(0)
-
-  // Reset when the bookmark changes
-  useEffect(() => {
-    setSrcIndex(0)
-  }, [url, customIcon])
+  const sourceKey = `${url}\0${customIcon ?? ''}`
+  const [sourceState, setSourceState] = useState({ key: sourceKey, index: 0 })
+  const srcIndex = sourceState.key === sourceKey ? sourceState.index : 0
 
   const exhausted = srcIndex >= sources.length
   const avatarColor = getAvatarColor(name)
@@ -59,7 +56,10 @@ export function FaviconImage({ url, name, customIcon, className = 'size-9 rounde
           width={36}
           height={36}
           className="size-full object-contain"
-          onError={() => setSrcIndex((i) => i + 1)}
+          onError={() => setSourceState((current) => ({
+            key: sourceKey,
+            index: current.key === sourceKey ? current.index + 1 : 1,
+          }))}
         />
       ) : (
         <span>{name.trim().charAt(0).toUpperCase()}</span>
