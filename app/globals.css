@@ -152,3 +152,17 @@
 html {
   scroll-behavior: smooth;
 }
+
+.sidebar-transition {
+  transition: width 200ms ease, transform 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .sidebar-transition {
+    transition: none;
+  }
+}
