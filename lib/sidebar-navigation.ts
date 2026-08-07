@@ -10,9 +10,13 @@ export interface SidebarItem {
   disabled: boolean
 }
 
+export function normalizeSearchQuery(query: string): string {
+  return query.trim().toLowerCase()
+}
+
 export function buildSidebarItems(groups: Group[], query: string): SidebarItem[] {
-  const hasQuery = query.trim().length > 0
-  const normalizedQuery = query.trim().toLowerCase()
+  const normalizedQuery = normalizeSearchQuery(query)
+  const hasQuery = normalizedQuery.length > 0
 
   return groups.map((group) => {
     const count = hasQuery

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   SIDEBAR_COLLAPSED_KEY,
   buildSidebarItems,
+  normalizeSearchQuery,
   readSidebarCollapsed,
   resolveActiveGroupId,
   writeSidebarCollapsed,
@@ -30,10 +31,22 @@ const groups: Group[] = [
 ]
 
 describe('sidebar navigation', () => {
-  it('builds items for every group when the query is empty', () => {
-    expect(buildSidebarItems(groups, '')).toMatchObject([
-      { id: 'vps', count: 2, disabled: false },
-      { id: 'docs', count: 0, disabled: false },
+  it('builds complete items in input order when the query is empty', () => {
+    expect(buildSidebarItems(groups, '')).toEqual([
+      {
+        id: 'vps',
+        name: 'VPS',
+        color: '#3B82F6',
+        count: 2,
+        disabled: false,
+      },
+      {
+        id: 'docs',
+        name: '资料',
+        color: '#10B981',
+        count: 0,
+        disabled: false,
+      },
     ])
   })
 
@@ -44,6 +57,13 @@ describe('sidebar navigation', () => {
     ])
     expect(buildSidebarItems(groups, 'V1.EXAMPLE')).toMatchObject([
       { id: 'vps', count: 1, disabled: false },
+      { id: 'docs', count: 0, disabled: true },
+    ])
+  })
+
+  it('matches bookmark names case-insensitively', () => {
+    expect(buildSidebarItems(groups, 'vPs')).toMatchObject([
+      { id: 'vps', count: 2, disabled: false },
       { id: 'docs', count: 0, disabled: true },
     ])
   })
@@ -60,12 +80,21 @@ describe('sidebar navigation', () => {
     expect(resolveActiveGroupId(['vps', 'docs'], 'missing')).toBe('vps')
     expect(resolveActiveGroupId([], 'missing')).toBeNull()
   })
+
+  it('normalizes shared search queries', () => {
+    expect(normalizeSearchQuery(' VpS ')).toBe('vps')
+  })
 })
 
 describe('sidebar collapsed preference', () => {
   it('reads only the persisted collapsed marker', () => {
     expect(readSidebarCollapsed({ getItem: () => '1' })).toBe(true)
     expect(readSidebarCollapsed({ getItem: () => null })).toBe(false)
+  })
+
+  it('rejects invalid persisted markers', () => {
+    expect(readSidebarCollapsed({ getItem: () => 'true' })).toBe(false)
+    expect(readSidebarCollapsed({ getItem: () => '0' })).toBe(false)
   })
 
   it('defaults to expanded when storage throws', () => {
@@ -76,7 +105,7 @@ describe('sidebar collapsed preference', () => {
     })).toBe(false)
   })
 
-  it('stores collapsed state and removes expanded state', () => {
+  it('stores collapsed state without removing the preference', () => {
     const storage = {
       setItem: vi.fn(),
       removeItem: vi.fn(),
@@ -84,9 +113,18 @@ describe('sidebar collapsed preference', () => {
 
     writeSidebarCollapsed(storage, true)
     expect(storage.setItem).toHaveBeenCalledWith(SIDEBAR_COLLAPSED_KEY, '1')
+    expect(storage.removeItem).not.toHaveBeenCalled()
+  })
+
+  it('removes expanded state without storing a marker', () => {
+    const storage = {
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    }
 
     writeSidebarCollapsed(storage, false)
     expect(storage.removeItem).toHaveBeenCalledWith(SIDEBAR_COLLAPSED_KEY)
+    expect(storage.setItem).not.toHaveBeenCalled()
   })
 
   it('does not propagate storage write errors', () => {
