@@ -10,10 +10,43 @@ import {
 const STICKY_HEADER_TOP = 112
 const GROUP_ELEMENT_PREFIX = 'group-'
 
-interface VisibleGroupEntry {
-  id: string
-  top: number
-  isIntersecting: boolean
+interface ActiveGroupObserverDependencies {
+  getElementById: (id: string) => Element | null
+  createObserver?: (
+    callback: IntersectionObserverCallback,
+    options: IntersectionObserverInit
+  ) => Pick<IntersectionObserver, 'observe' | 'disconnect'>
+}
+
+export function observeActiveGroups(
+  groupIds: string[],
+  onActive: (id: string) => void,
+  dependencies: ActiveGroupObserverDependencies
+): () => void {
+  if (dependencies.createObserver === undefined) return () => {}
+
+  const observer = dependencies.createObserver((entries) => {
+    const closestId = selectClosestVisibleGroup(entries.map((entry) => ({
+      id: entry.target.id.slice(GROUP_ELEMENT_PREFIX.length),
+      top: entry.boundingClientRect.top,
+      isIntersecting: entry.isIntersecting,
+    })), STICKY_HEADER_TOP)
+
+    if (closestId !== null) {
+      onActive(closestId)
+    }
+  }, {
+    rootMargin: `-${STICKY_HEADER_TOP}px 0px -75% 0px`,
+  })
+
+  for (const id of groupIds) {
+    const element = dependencies.getElementById(`${GROUP_ELEMENT_PREFIX}${id}`)
+    if (element !== null) {
+      observer.observe(element)
+    }
+  }
+
+  return () => observer.disconnect()
 }
 
 export function useActiveGroup(groupIds: string[]): {
@@ -23,43 +56,19 @@ export function useActiveGroup(groupIds: string[]): {
   const [activeGroupId, setActiveGroupId] = React.useState<string | null>(() =>
     resolveActiveGroupId(groupIds, null)
   )
-  const resolvedActiveGroupId = resolveActiveGroupId(groupIds, activeGroupId)
 
   React.useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined') return
-
-    const visibleGroups = new Map<string, VisibleGroupEntry>()
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        const id = entry.target.id.slice(GROUP_ELEMENT_PREFIX.length)
-        visibleGroups.set(id, {
-          id,
-          top: entry.boundingClientRect.top,
-          isIntersecting: entry.isIntersecting,
-        })
-      }
-
-      const closestId = selectClosestVisibleGroup(
-        Array.from(visibleGroups.values()),
-        STICKY_HEADER_TOP
-      )
-
-      if (closestId !== null) {
-        setActiveGroupId(closestId)
-      }
-    }, {
-      rootMargin: `-${STICKY_HEADER_TOP}px 0px 0px 0px`,
-    })
-
-    for (const id of groupIds) {
-      const element = document.getElementById(`${GROUP_ELEMENT_PREFIX}${id}`)
-      if (element !== null) {
-        observer.observe(element)
-      }
-    }
-
-    return () => observer.disconnect()
+    // Filtering can invalidate stored state before the observer reports again.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveGroupId((currentId) => resolveActiveGroupId(groupIds, currentId))
   }, [groupIds])
 
-  return { activeGroupId: resolvedActiveGroupId, setActiveGroupId }
+  React.useEffect(() => observeActiveGroups(groupIds, setActiveGroupId, {
+    getElementById: (id) => document.getElementById(id),
+    createObserver: typeof IntersectionObserver === 'undefined'
+      ? undefined
+      : (callback, options) => new IntersectionObserver(callback, options),
+  }), [groupIds])
+
+  return { activeGroupId, setActiveGroupId }
 }
