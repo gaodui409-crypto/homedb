@@ -22,7 +22,10 @@ export interface GroupSidebarContentProps {
   onSelect: (id: string) => void
 }
 
-export type DesktopGroupSidebarProps = GroupSidebarContentProps
+export type DesktopGroupSidebarProps = Omit<
+  GroupSidebarContentProps,
+  'collapsed'
+>
 
 function getInitialCollapsedState(): boolean {
   if (typeof window === 'undefined') return false
@@ -35,7 +38,8 @@ function getInitialCollapsedState(): boolean {
 }
 
 function getItemLabel(item: SidebarItem): string {
-  return `${item.name}，${item.count} 个书签`
+  const matchState = item.disabled ? '，无匹配结果' : ''
+  return `${item.name}，${item.count} 个书签${matchState}`
 }
 
 export function GroupSidebarContent({
@@ -60,7 +64,8 @@ export function GroupSidebarContent({
         const button = (
           <button
             type="button"
-            aria-label={collapsed ? label : undefined}
+            aria-label={label}
+            aria-hidden={collapsed && item.disabled ? true : undefined}
             aria-current={active ? 'location' : undefined}
             disabled={item.disabled}
             onClick={() => onSelect(item.id)}
@@ -103,9 +108,10 @@ export function GroupSidebarContent({
                 {item.disabled ? (
                   <TooltipTrigger asChild>
                     <span
+                      role="button"
                       tabIndex={0}
                       aria-label={label}
-                      title={label}
+                      aria-disabled="true"
                       className="block w-full rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                       {button}

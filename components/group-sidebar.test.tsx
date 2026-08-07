@@ -1,8 +1,30 @@
-import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it, vi } from 'vitest'
+// @vitest-environment jsdom
 
-import type { SidebarItem } from '@/lib/sidebar-navigation'
-import { DesktopGroupSidebar, GroupSidebarContent } from './group-sidebar'
+import { cleanup, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import {
+  SIDEBAR_COLLAPSED_KEY,
+  type SidebarItem,
+} from '@/lib/sidebar-navigation'
+import {
+  DesktopGroupSidebar,
+  GroupSidebarContent,
+  type DesktopGroupSidebarProps,
+  type GroupSidebarContentProps,
+} from './group-sidebar'
+
+function installRadixTooltipBrowserStubs() {
+  // Radix Popper observes portaled tooltip content; jsdom has no layout observer.
+  vi.stubGlobal('ResizeObserver', class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  })
+}
+
+installRadixTooltipBrowserStubs()
 
 const items: SidebarItem[] = [
   {
@@ -16,107 +38,215 @@ const items: SidebarItem[] = [
     id: 'reference',
     name: 'Reference material with a deliberately long group name',
     color: '#10B981',
-    count: 3,
+    count: 0,
     disabled: true,
   },
 ]
 
-function renderContent(overrides: Partial<{
-  items: SidebarItem[]
-  activeGroupId: string | null
-  collapsed: boolean
-}> = {}) {
-  return renderToStaticMarkup(
+const enabledLabel = 'Infrastructure，12 个书签'
+const disabledLabel =
+  'Reference material with a deliberately long group name，0 个书签，无匹配结果'
+
+type DesktopOwnsCollapsedState =
+  'collapsed' extends keyof DesktopGroupSidebarProps ? false : true
+
+const desktopOwnsCollapsedState: DesktopOwnsCollapsedState = true
+
+function renderContent(overrides: Partial<GroupSidebarContentProps> = {}) {
+  const onSelect = overrides.onSelect ?? vi.fn()
+  const result = render(
     <GroupSidebarContent
       items={overrides.items ?? items}
       activeGroupId={overrides.activeGroupId ?? null}
       collapsed={overrides.collapsed}
-      onSelect={vi.fn()}
+      onSelect={onSelect}
     />
   )
+
+  return { ...result, onSelect }
 }
 
-describe('GroupSidebarContent', () => {
-  it('renders names, counts, and color swatches in input order when expanded', () => {
-    const markup = renderContent()
-    const firstNameIndex = markup.indexOf('Infrastructure')
-    const secondNameIndex = markup.indexOf('Reference material')
+function renderDesktop(overrides: Partial<DesktopGroupSidebarProps> = {}) {
+  const onSelect = overrides.onSelect ?? vi.fn()
+  const result = render(
+    <DesktopGroupSidebar
+      items={overrides.items ?? items}
+      activeGroupId={overrides.activeGroupId ?? null}
+      onSelect={onSelect}
+    />
+  )
 
-    expect(firstNameIndex).toBeGreaterThan(-1)
-    expect(secondNameIndex).toBeGreaterThan(firstNameIndex)
-    expect(markup).toContain('>12<')
-    expect(markup).toContain('>3<')
-    expect(markup).toContain('background-color:#3B82F6')
-    expect(markup).toContain('background-color:#10B981')
-    expect(markup).toContain(
-      'title="Reference material with a deliberately long group name"'
+  return { ...result, onSelect }
+}
+
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+  window.localStorage.clear()
+})
+
+describe('GroupSidebarContent', () => {
+  it('renders expanded items in input order with counts, swatches, and full names', () => {
+    const { container } = renderContent()
+    const buttons = screen.getAllByRole('button')
+    const swatches = container.querySelectorAll('[aria-hidden="true"]')
+
+    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+      enabledLabel,
+      disabledLabel,
+    ])
+    expect(within(buttons[0]).getByText('12')).toBeTruthy()
+    expect(within(buttons[1]).getByText('0')).toBeTruthy()
+    expect(swatches[0].getAttribute('style')).toContain(
+      'background-color: rgb(59, 130, 246)'
     )
+    expect(swatches[1].getAttribute('style')).toContain(
+      'background-color: rgb(16, 185, 129)'
+    )
+    expect(
+      within(buttons[1])
+        .getByText('Reference material with a deliberately long group name')
+        .getAttribute('title')
+    ).toBe('Reference material with a deliberately long group name')
   })
 
   it('marks the active item as the current location', () => {
-    const markup = renderContent({ activeGroupId: 'infrastructure' })
+    renderContent({ activeGroupId: 'infrastructure' })
 
-    expect(markup).toContain('aria-current="location"')
+    expect(
+      screen
+        .getByRole('button', { name: enabledLabel })
+        .getAttribute('aria-current')
+    ).toBe('location')
   })
 
-  it('uses the native disabled attribute for disabled items', () => {
-    const markup = renderContent()
-    const disabledButton = markup.match(/<button[^>]*disabled=""[^>]*>/)
+  it('selects an enabled collapsed item exactly once without a duplicate tab stop', async () => {
+    const user = userEvent.setup()
+    const { onSelect } = renderContent({ items: [items[0]], collapsed: true })
+    const button = screen.getByRole('button', { name: enabledLabel })
 
-    expect(disabledButton).not.toBeNull()
+    expect(button.tagName).toBe('BUTTON')
+    expect(document.querySelectorAll('[tabindex="0"]')).toHaveLength(0)
+
+    await user.click(button)
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith('infrastructure')
   })
 
-  it('keeps a collapsed item accessible without visual name or count content', () => {
-    const markup = renderContent({ items: [items[0]], collapsed: true })
-    const button = markup.match(/<button([^>]*)>([\s\S]*?)<\/button>/)
+  it('exposes a disabled collapsed item as one focusable unavailable button', async () => {
+    const user = userEvent.setup()
+    const { container, onSelect } = renderContent({
+      items: [items[1]],
+      collapsed: true,
+    })
+    const trigger = screen.getByRole('button', { name: disabledLabel })
+    const innerButton = trigger.querySelector('button') as HTMLButtonElement | null
 
-    expect(button).not.toBeNull()
-    expect(button?.[1]).toMatch(/aria-label="[^"]*Infrastructure[^"]*12[^"]*"/)
-    expect(button?.[1]).toContain('data-slot="tooltip-trigger"')
-    expect(markup).not.toContain('tabindex="0"')
-    expect(button?.[2]).not.toContain('Infrastructure')
-    expect(button?.[2]).not.toContain('12')
-    expect(button?.[2]).toContain('background-color:#3B82F6')
-  })
+    expect(trigger.tagName).toBe('SPAN')
+    expect(trigger.getAttribute('aria-disabled')).toBe('true')
+    expect(trigger.getAttribute('tabindex')).toBe('0')
+    expect(trigger.hasAttribute('title')).toBe(false)
+    expect(screen.getAllByRole('button', { name: disabledLabel })).toHaveLength(1)
+    expect(innerButton?.disabled).toBe(true)
+    expect(container.querySelectorAll('[tabindex="0"]')).toHaveLength(1)
 
-  it('keeps a disabled collapsed button native while its tooltip wrapper is focusable', () => {
-    const markup = renderContent({ items: [items[1]], collapsed: true })
-    const disabledButton = markup.match(/<button[^>]*disabled=""[^>]*>/)
-    const tooltipTrigger = markup.match(
-      /<span[^>]*data-slot="tooltip-trigger"[^>]*>/
-    )
+    await user.tab()
 
-    expect(disabledButton).not.toBeNull()
-    expect(tooltipTrigger).not.toBeNull()
-    expect(tooltipTrigger?.[0]).toContain('tabindex="0"')
-    expect(tooltipTrigger?.[0]).toMatch(
-      /aria-label="[^"]*Reference material with a deliberately long group name[^"]*3[^"]*"/
-    )
-    expect(tooltipTrigger?.[0]).toMatch(
-      /title="[^"]*Reference material with a deliberately long group name[^"]*3[^"]*"/
-    )
+    expect(document.activeElement).toBe(trigger)
+    expect((await screen.findByRole('tooltip')).textContent).toBe(disabledLabel)
+
+    await user.click(trigger)
+    if (innerButton) await user.click(innerButton)
+
+    expect(onSelect).not.toHaveBeenCalled()
   })
 
   it('uses an explicit eight-pixel radius for item and collapse buttons', () => {
-    const itemMarkup = renderContent({ items: [items[0]] })
-    const desktopMarkup = renderToStaticMarkup(
-      <DesktopGroupSidebar
-        items={[items[0]]}
+    renderDesktop({ items: [items[0]] })
+
+    expect(screen.getByRole('button', { name: enabledLabel }).className).toContain(
+      'rounded-[8px]'
+    )
+    expect(
+      screen.getByRole('button', { name: '收起分组侧边栏' }).className
+    ).toContain('rounded-[8px]')
+  })
+
+  it('renders a concise empty state only when expanded', () => {
+    const { rerender } = render(
+      <GroupSidebarContent
+        items={[]}
         activeGroupId={null}
         onSelect={vi.fn()}
       />
     )
-    const itemButton = itemMarkup.match(/<button[^>]*>/)
-    const collapseButton = desktopMarkup.match(
-      /<button[^>]*aria-label="收起分组侧边栏"[^>]*>/
+
+    expect(screen.getByText('暂无分组')).toBeTruthy()
+
+    rerender(
+      <GroupSidebarContent
+        items={[]}
+        activeGroupId={null}
+        collapsed
+        onSelect={vi.fn()}
+      />
     )
 
-    expect(itemButton?.[0]).toContain('rounded-[8px]')
-    expect(collapseButton?.[0]).toContain('rounded-[8px]')
+    expect(screen.queryByText('暂无分组')).toBeNull()
+  })
+})
+
+describe('DesktopGroupSidebar', () => {
+  it('owns collapsed state instead of advertising a collapsed prop', () => {
+    expect(desktopOwnsCollapsedState).toBe(true)
   })
 
-  it('renders a concise empty state only when expanded', () => {
-    expect(renderContent({ items: [] })).toContain('暂无分组')
-    expect(renderContent({ items: [], collapsed: true })).not.toContain('暂无分组')
+  it('toggles collapsed UI and persists both collapsed and expanded states', async () => {
+    const user = userEvent.setup()
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const removeItem = vi.spyOn(Storage.prototype, 'removeItem')
+    renderDesktop()
+
+    await user.click(screen.getByRole('button', { name: '收起分组侧边栏' }))
+
+    const expandButton = screen.getByRole('button', { name: '展开分组侧边栏' })
+    expect(expandButton.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByLabelText('分组侧边栏').className).toContain('w-14')
+    expect(setItem).toHaveBeenCalledWith(SIDEBAR_COLLAPSED_KEY, '1')
+    expect(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBe('1')
+
+    await user.click(expandButton)
+
+    expect(
+      screen.getByRole('button', { name: '收起分组侧边栏' })
+        .getAttribute('aria-expanded')
+    ).toBe('true')
+    expect(screen.getByLabelText('分组侧边栏').className).toContain('w-[220px]')
+    expect(removeItem).toHaveBeenCalledWith(SIDEBAR_COLLAPSED_KEY)
+    expect(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBeNull()
+  })
+
+  it('restores persisted collapsed state on initial render', () => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, '1')
+
+    renderDesktop()
+
+    expect(screen.getByRole('button', { name: '展开分组侧边栏' })).toBeTruthy()
+    expect(screen.getByLabelText('分组侧边栏').className).toContain('w-14')
+    expect(screen.queryByRole('heading', { name: '分组' })).toBeNull()
+  })
+
+  it('keeps the in-memory toggle when storage writes fail', async () => {
+    const user = userEvent.setup()
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('storage unavailable')
+    })
+    renderDesktop()
+
+    await user.click(screen.getByRole('button', { name: '收起分组侧边栏' }))
+
+    expect(screen.getByRole('button', { name: '展开分组侧边栏' })).toBeTruthy()
+    expect(screen.getByLabelText('分组侧边栏').className).toContain('w-14')
   })
 })
