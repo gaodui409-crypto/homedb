@@ -256,6 +256,8 @@ git commit -m "feat: add swipeable mobile group drawer"
 
 Remove the `groups` prop and the horizontal group-link list. Keep a stable search row aligned to the right and preserve the current pinned row. Do not change bookmark opening behavior.
 
+Import `normalizeSearchQuery` from `lib/sidebar-navigation` and use its normalized value in the existing `filteredGroups` bookmark filter. Both the sidebar counts and rendered search results must therefore trim and lowercase through the same helper.
+
 - [ ] **Step 2: Mark scroll targets**
 
 Add `data-group-id={group.id}` to each `BookmarkGroup` section and increase its scroll margin only as needed to clear the sticky header and QuickBar. Keep the existing section id `group-${group.id}`.
