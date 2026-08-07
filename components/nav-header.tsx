@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useRef, useState, type RefObject } from 'react'
 import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
   Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, Menu,
@@ -8,13 +8,11 @@ import {
 import type { Theme, NavData } from '@/lib/types'
 import { normalizeImportData } from '@/lib/nav-data'
 
-interface NavHeaderProps {
+interface NavHeaderBaseProps {
   title: string
   theme: Theme
   adminMode: boolean
   syncing?: boolean
-  navigationOpen?: boolean
-  onNavigationOpenChange?: (open: boolean) => void
   onThemeChange: (t: Theme) => void
   onTitleChange: (t: string) => void
   onAdminToggle: () => void
@@ -23,6 +21,20 @@ interface NavHeaderProps {
   onImportFile: (data: NavData, fileName: string) => void
   onLogout?: () => void
 }
+
+type NavHeaderNavigationProps =
+  | {
+      navigationOpen: boolean
+      onNavigationOpenChange: (open: boolean) => void
+      navigationTriggerRef: RefObject<HTMLButtonElement | null>
+    }
+  | {
+      navigationOpen?: never
+      onNavigationOpenChange?: never
+      navigationTriggerRef?: never
+    }
+
+type NavHeaderProps = NavHeaderBaseProps & NavHeaderNavigationProps
 
 const THEMES: { key: Theme; icon: React.ReactNode; label: string }[] = [
   { key: 'light', icon: <Sun size={15} />, label: '日间模式' },
@@ -35,8 +47,9 @@ export function NavHeader({
   theme,
   adminMode,
   syncing,
-  navigationOpen = false,
+  navigationOpen,
   onNavigationOpenChange,
+  navigationTriggerRef,
   onThemeChange,
   onTitleChange,
   onAdminToggle,
@@ -78,8 +91,9 @@ export function NavHeader({
     <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3 h-14">
-          {onNavigationOpenChange && (
+          {onNavigationOpenChange && navigationTriggerRef && (
             <button
+              ref={navigationTriggerRef}
               type="button"
               aria-label="打开分组导航"
               aria-expanded={navigationOpen}

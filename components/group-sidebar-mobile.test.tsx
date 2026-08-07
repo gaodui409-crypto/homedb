@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 
-import type { ComponentProps, ReactNode } from 'react'
+import {
+  createRef,
+  type ComponentProps,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import {
   act,
   cleanup,
@@ -15,23 +20,44 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SidebarItem } from '@/lib/sidebar-navigation'
 import { MobileGroupDrawer } from './group-sidebar'
 
+const drawerMockState = vi.hoisted(() => ({
+  onCloseAutoFocus: undefined as
+    | ((event: { preventDefault: () => void }) => void)
+    | undefined,
+}))
+
 vi.mock('@/components/ui/drawer', () => ({
   Drawer: ({
     open,
+    autoFocus,
     children,
   }: {
     open: boolean
+    autoFocus?: boolean
     children: ReactNode
   }) => (
-    <div data-testid="drawer-root" data-open={open}>
+    <div
+      data-testid="drawer-root"
+      data-open={open}
+      data-auto-focus={autoFocus}
+    >
       {open ? children : null}
     </div>
   ),
-  DrawerContent: ({ children, ...props }: ComponentProps<'div'>) => (
-    <div data-slot="drawer-content" {...props}>
-      {children}
-    </div>
-  ),
+  DrawerContent: ({
+    children,
+    onCloseAutoFocus,
+    ...props
+  }: ComponentProps<'div'> & {
+    onCloseAutoFocus?: (event: { preventDefault: () => void }) => void
+  }) => {
+    drawerMockState.onCloseAutoFocus = onCloseAutoFocus
+    return (
+      <div data-slot="drawer-content" {...props}>
+        {children}
+      </div>
+    )
+  },
   DrawerHeader: ({ children, ...props }: ComponentProps<'div'>) => (
     <div {...props}>{children}</div>
   ),
@@ -61,6 +87,10 @@ const items: SidebarItem[] = [
 ]
 
 const DESKTOP_MEDIA_QUERY = '(min-width: 1024px)'
+
+type DrawerPropsWithTrigger = ComponentProps<typeof MobileGroupDrawer> & {
+  triggerRef: RefObject<HTMLButtonElement | null>
+}
 
 function installMatchMedia(initialMatches: boolean) {
   let matches = initialMatches
@@ -110,24 +140,60 @@ function installMatchMedia(initialMatches: boolean) {
   }
 }
 
+function installAnimationFrame() {
+  let nextFrameId = 1
+  const callbacks = new Map<number, FrameRequestCallback>()
+  const requestAnimationFrame = vi.fn((callback: FrameRequestCallback) => {
+    const frameId = nextFrameId++
+    callbacks.set(frameId, callback)
+    return frameId
+  })
+  const cancelAnimationFrame = vi.fn((frameId: number) => {
+    callbacks.delete(frameId)
+  })
+
+  vi.stubGlobal('requestAnimationFrame', requestAnimationFrame)
+  vi.stubGlobal('cancelAnimationFrame', cancelAnimationFrame)
+
+  return {
+    cancelAnimationFrame,
+    requestAnimationFrame,
+    run(frameId: number) {
+      const callback = callbacks.get(frameId)
+      callbacks.delete(frameId)
+      callback?.(0)
+    },
+  }
+}
+
 let desktopMedia: ReturnType<typeof installMatchMedia>
 
 function renderDrawer(
-  overrides: Partial<ComponentProps<typeof MobileGroupDrawer>> = {}
+  overrides: Partial<DrawerPropsWithTrigger> = {}
 ) {
-  const onOpenChange = overrides.onOpenChange ?? vi.fn()
-  const onSelect = overrides.onSelect ?? vi.fn()
+  const props: DrawerPropsWithTrigger = {
+    items,
+    activeGroupId: null,
+    open: false,
+    onOpenChange: vi.fn(),
+    onSelect: vi.fn(),
+    triggerRef: createRef<HTMLButtonElement>(),
+    ...overrides,
+  }
   const result = render(
-    <MobileGroupDrawer
-      items={overrides.items ?? items}
-      activeGroupId={overrides.activeGroupId ?? null}
-      open={overrides.open ?? false}
-      onOpenChange={onOpenChange}
-      onSelect={onSelect}
-    />
+    <MobileGroupDrawer {...props} />
   )
 
-  return { ...result, onOpenChange, onSelect }
+  return {
+    ...result,
+    onOpenChange: props.onOpenChange,
+    onSelect: props.onSelect,
+    triggerRef: props.triggerRef,
+    rerenderDrawer(nextProps: Partial<DrawerPropsWithTrigger>) {
+      Object.assign(props, nextProps)
+      result.rerender(<MobileGroupDrawer {...props} />)
+    },
+  }
 }
 
 beforeEach(() => {
@@ -149,10 +215,30 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  drawerMockState.onCloseAutoFocus = undefined
   vi.unstubAllGlobals()
 })
 
 describe('MobileGroupDrawer', () => {
+  it('enables drawer autofocus and restores focus through close autofocus', () => {
+    const triggerRef = createRef<HTMLButtonElement>()
+    render(<button ref={triggerRef}>Navigation trigger</button>)
+    renderDrawer({ open: true, triggerRef })
+    const preventDefault = vi.fn()
+
+    expect(screen.getByTestId('drawer-root').getAttribute('data-auto-focus')).toBe(
+      'true'
+    )
+    expect(drawerMockState.onCloseAutoFocus).toEqual(expect.any(Function))
+
+    act(() => {
+      drawerMockState.onCloseAutoFocus?.({ preventDefault })
+    })
+
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).toBe(triggerRef.current)
+  })
+
   it('keeps Vaul closed and omits mobile UI on desktop despite external open state', () => {
     desktopMedia.setMatches(true)
 
@@ -231,16 +317,9 @@ describe('MobileGroupDrawer', () => {
   it('closes before selecting an enabled group in the next animation frame', async () => {
     const user = userEvent.setup()
     const calls: string[] = []
-    let frameCallback: FrameRequestCallback | undefined
+    const frames = installAnimationFrame()
     const onOpenChange = vi.fn(() => calls.push('close'))
     const onSelect = vi.fn(() => calls.push('select'))
-    vi.stubGlobal(
-      'requestAnimationFrame',
-      vi.fn((callback: FrameRequestCallback) => {
-        frameCallback = callback
-        return 1
-      })
-    )
     renderDrawer({ open: true, onOpenChange, onSelect })
 
     await user.click(
@@ -251,10 +330,46 @@ describe('MobileGroupDrawer', () => {
     expect(onSelect).not.toHaveBeenCalled()
     expect(calls).toEqual(['close'])
 
-    frameCallback?.(0)
+    frames.run(1)
 
     expect(onSelect).toHaveBeenCalledWith('infrastructure')
     expect(calls).toEqual(['close', 'select'])
+  })
+
+  it('cancels the prior selection frame when selection repeats', async () => {
+    const user = userEvent.setup()
+    const frames = installAnimationFrame()
+    const { onSelect } = renderDrawer({ open: true })
+    const enabled = screen.getByRole('button', {
+      name: 'Infrastructure，12 个书签',
+    })
+
+    await user.click(enabled)
+    await user.click(enabled)
+
+    expect(frames.requestAnimationFrame).toHaveBeenCalledTimes(2)
+    expect(frames.cancelAnimationFrame).toHaveBeenCalledWith(1)
+
+    frames.run(1)
+    frames.run(2)
+
+    expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onSelect).toHaveBeenCalledWith('infrastructure')
+  })
+
+  it('cancels a pending selection frame on unmount', async () => {
+    const user = userEvent.setup()
+    const frames = installAnimationFrame()
+    const { onSelect, unmount } = renderDrawer({ open: true })
+
+    await user.click(
+      screen.getByRole('button', { name: 'Infrastructure，12 个书签' })
+    )
+    unmount()
+    frames.run(1)
+
+    expect(frames.cancelAnimationFrame).toHaveBeenCalledWith(1)
+    expect(onSelect).not.toHaveBeenCalled()
   })
 
   it('does not close or select when a disabled group is clicked', async () => {
@@ -283,14 +398,15 @@ describe('MobileGroupDrawer', () => {
     expect(edge.className).toContain('w-5')
     expect(edge.className).toContain('touch-pan-y')
     expect(edge.className).toContain('lg:hidden')
+    expect(edge.className).toContain('pointer-events-none')
 
-    fireEvent.pointerDown(edge, {
+    fireEvent.pointerDown(window, {
       pointerId: 7,
       pointerType: 'touch',
       clientX: 0,
       clientY: 100,
     })
-    fireEvent.pointerMove(edge, {
+    fireEvent.pointerMove(window, {
       pointerId: 7,
       pointerType: 'touch',
       clientX: 48,
@@ -311,7 +427,7 @@ describe('MobileGroupDrawer', () => {
     {
       name: 'leftward swipe',
       pointerType: 'touch',
-      start: [60, 100],
+      start: [20, 100],
       end: [0, 100],
     },
     {
@@ -326,23 +442,28 @@ describe('MobileGroupDrawer', () => {
       start: [0, 100],
       end: [60, 133],
     },
+    {
+      name: 'touch starting outside the edge',
+      pointerType: 'touch',
+      start: [21, 100],
+      end: [80, 100],
+    },
   ])('ignores a $name', ({ pointerType, start, end }) => {
     const { onOpenChange } = renderDrawer()
-    const edge = screen.getByTestId('mobile-group-drawer-edge')
 
-    fireEvent.pointerDown(edge, {
+    fireEvent.pointerDown(window, {
       pointerId: 3,
       pointerType,
       clientX: start[0],
       clientY: start[1],
     })
-    fireEvent.pointerMove(edge, {
+    fireEvent.pointerMove(window, {
       pointerId: 3,
       pointerType,
       clientX: end[0],
       clientY: end[1],
     })
-    fireEvent.pointerUp(edge, {
+    fireEvent.pointerUp(window, {
       pointerId: 3,
       pointerType,
       clientX: end[0],
@@ -350,5 +471,111 @@ describe('MobileGroupDrawer', () => {
     })
 
     expect(onOpenChange).not.toHaveBeenCalled()
+  })
+
+  it.each(['pointerup', 'pointercancel', 'blur'] as const)(
+    'resets a pending edge swipe on %s',
+    (resetEvent) => {
+      const { onOpenChange } = renderDrawer()
+
+      fireEvent.pointerDown(window, {
+        pointerId: 5,
+        pointerType: 'touch',
+        clientX: 0,
+        clientY: 100,
+      })
+      if (resetEvent === 'blur') {
+        fireEvent.blur(window)
+      } else {
+        fireEvent[resetEvent === 'pointerup' ? 'pointerUp' : 'pointerCancel'](
+          window,
+          {
+            pointerId: 5,
+            pointerType: 'touch',
+            clientX: 10,
+            clientY: 100,
+          }
+        )
+      }
+      fireEvent.pointerMove(window, {
+        pointerId: 5,
+        pointerType: 'touch',
+        clientX: 60,
+        clientY: 100,
+      })
+
+      expect(onOpenChange).not.toHaveBeenCalled()
+    }
+  )
+
+  it('clears stale gesture state whenever open state changes', () => {
+    const { onOpenChange, rerenderDrawer } = renderDrawer()
+
+    fireEvent.pointerDown(window, {
+      pointerId: 8,
+      pointerType: 'touch',
+      clientX: 0,
+      clientY: 100,
+    })
+    rerenderDrawer({ open: true })
+    rerenderDrawer({ open: false })
+    fireEvent.pointerMove(window, {
+      pointerId: 8,
+      pointerType: 'touch',
+      clientX: 60,
+      clientY: 100,
+    })
+
+    expect(onOpenChange).not.toHaveBeenCalled()
+  })
+
+  it('clears stale gesture state whenever desktop state changes', () => {
+    const { onOpenChange } = renderDrawer()
+
+    fireEvent.pointerDown(window, {
+      pointerId: 9,
+      pointerType: 'touch',
+      clientX: 0,
+      clientY: 100,
+    })
+    act(() => desktopMedia.setMatches(true))
+    act(() => desktopMedia.setMatches(false))
+    fireEvent.pointerMove(window, {
+      pointerId: 9,
+      pointerType: 'touch',
+      clientX: 60,
+      clientY: 100,
+    })
+
+    expect(onOpenChange).not.toHaveBeenCalled()
+  })
+
+  it('removes every window gesture listener on cleanup', () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener')
+    const removeEventListener = vi.spyOn(window, 'removeEventListener')
+    const { unmount } = renderDrawer()
+    const eventTypes = [
+      'pointerdown',
+      'pointermove',
+      'pointerup',
+      'pointercancel',
+      'blur',
+    ] as const
+    const listeners = eventTypes.map((eventType) => ({
+      eventType,
+      listener: addEventListener.mock.calls.find(
+        ([registeredType]) => registeredType === eventType
+      )?.[1],
+    }))
+
+    for (const { listener } of listeners) {
+      expect(listener).toEqual(expect.any(Function))
+    }
+
+    unmount()
+
+    for (const { eventType, listener } of listeners) {
+      expect(removeEventListener).toHaveBeenCalledWith(eventType, listener)
+    }
   })
 })

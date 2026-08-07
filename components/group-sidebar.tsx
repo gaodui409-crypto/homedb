@@ -5,7 +5,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from 'react'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
@@ -43,6 +43,7 @@ export type DesktopGroupSidebarProps = Omit<
 export interface MobileGroupDrawerProps extends GroupSidebarContentProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  triggerRef: RefObject<HTMLButtonElement | null>
 }
 
 interface TouchPointerStart {
@@ -264,8 +265,10 @@ export function MobileGroupDrawer({
   open,
   onOpenChange,
   onSelect,
+  triggerRef,
 }: MobileGroupDrawerProps) {
   const touchPointer = useRef<TouchPointerStart | null>(null)
+  const selectionFrame = useRef<number | null>(null)
   const isDesktop = useIsDesktop()
   const effectiveOpen = open && !isDesktop
 
@@ -273,45 +276,88 @@ export function MobileGroupDrawer({
     if (isDesktop && open) onOpenChange(false)
   }, [isDesktop, onOpenChange, open])
 
-  function releaseTouchPointer(event: ReactPointerEvent<HTMLDivElement>) {
-    if (touchPointer.current?.pointerId !== event.pointerId) return
-
+  useEffect(() => {
     touchPointer.current = null
-    event.currentTarget.releasePointerCapture?.(event.pointerId)
-  }
+    if (open || isDesktop) return
 
-  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.pointerType !== 'touch' || touchPointer.current !== null) return
+    function handlePointerDown(event: PointerEvent) {
+      if (
+        event.pointerType !== 'touch' ||
+        event.clientX > 20 ||
+        touchPointer.current !== null
+      ) {
+        return
+      }
 
-    touchPointer.current = {
-      pointerId: event.pointerId,
-      x: event.clientX,
-      y: event.clientY,
-    }
-    event.currentTarget.setPointerCapture?.(event.pointerId)
-  }
-
-  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const start = touchPointer.current
-    if (start === null || start.pointerId !== event.pointerId) return
-
-    const dx = event.clientX - start.x
-    const dy = Math.abs(event.clientY - start.y)
-
-    if (dy > 32) {
-      releaseTouchPointer(event)
-      return
+      touchPointer.current = {
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+      }
     }
 
-    if (dx >= 48) {
-      releaseTouchPointer(event)
-      onOpenChange(true)
+    function handlePointerMove(event: PointerEvent) {
+      const start = touchPointer.current
+      if (start === null || start.pointerId !== event.pointerId) return
+
+      const dx = event.clientX - start.x
+      const dy = Math.abs(event.clientY - start.y)
+
+      if (dy > 32) {
+        touchPointer.current = null
+        return
+      }
+
+      if (dx >= 48) {
+        touchPointer.current = null
+        onOpenChange(true)
+      }
     }
-  }
+
+    function handlePointerEnd(event: PointerEvent) {
+      if (touchPointer.current?.pointerId === event.pointerId) {
+        touchPointer.current = null
+      }
+    }
+
+    function handleBlur() {
+      touchPointer.current = null
+    }
+
+    window.addEventListener('pointerdown', handlePointerDown)
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerEnd)
+    window.addEventListener('pointercancel', handlePointerEnd)
+    window.addEventListener('blur', handleBlur)
+
+    return () => {
+      touchPointer.current = null
+      window.removeEventListener('pointerdown', handlePointerDown)
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerEnd)
+      window.removeEventListener('pointercancel', handlePointerEnd)
+      window.removeEventListener('blur', handleBlur)
+    }
+  }, [isDesktop, onOpenChange, open])
+
+  useEffect(() => {
+    return () => {
+      if (selectionFrame.current !== null) {
+        cancelAnimationFrame(selectionFrame.current)
+      }
+    }
+  }, [])
 
   function handleSelect(id: string) {
+    if (selectionFrame.current !== null) {
+      cancelAnimationFrame(selectionFrame.current)
+    }
+
     onOpenChange(false)
-    requestAnimationFrame(() => onSelect(id))
+    selectionFrame.current = requestAnimationFrame(() => {
+      selectionFrame.current = null
+      onSelect(id)
+    })
   }
 
   return (
@@ -320,8 +366,13 @@ export function MobileGroupDrawer({
         open={effectiveOpen}
         onOpenChange={onOpenChange}
         direction="left"
+        autoFocus
       >
         <DrawerContent
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            triggerRef.current?.focus()
+          }}
           className={cn(
             'h-full w-[min(78vw,320px)] max-w-[320px] sm:max-w-[320px] lg:hidden',
             'data-[vaul-drawer-direction=left]:w-[min(78vw,320px)]',
@@ -352,11 +403,7 @@ export function MobileGroupDrawer({
         <div
           aria-hidden="true"
           data-testid="mobile-group-drawer-edge"
-          className="fixed bottom-0 left-0 top-14 z-20 w-5 touch-pan-y lg:hidden"
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={releaseTouchPointer}
-          onPointerCancel={releaseTouchPointer}
+          className="pointer-events-none fixed bottom-0 left-0 top-14 z-20 w-5 touch-pan-y lg:hidden"
         />
       )}
     </>
