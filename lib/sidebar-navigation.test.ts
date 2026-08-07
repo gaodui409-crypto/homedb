@@ -48,6 +48,13 @@ describe('sidebar navigation', () => {
     ])
   })
 
+  it('trims surrounding whitespace before matching', () => {
+    expect(buildSidebarItems(groups, ' 02 ')).toMatchObject([
+      { id: 'vps', count: 1, disabled: false },
+      { id: 'docs', count: 0, disabled: true },
+    ])
+  })
+
   it('keeps the current active group or falls back to the first group', () => {
     expect(resolveActiveGroupId(['vps', 'docs'], 'docs')).toBe('docs')
     expect(resolveActiveGroupId(['vps', 'docs'], 'missing')).toBe('vps')

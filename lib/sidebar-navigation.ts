@@ -12,7 +12,7 @@ export interface SidebarItem {
 
 export function buildSidebarItems(groups: Group[], query: string): SidebarItem[] {
   const hasQuery = query.trim().length > 0
-  const normalizedQuery = query.toLowerCase()
+  const normalizedQuery = query.trim().toLowerCase()
 
   return groups.map((group) => {
     const count = hasQuery
