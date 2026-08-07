@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { SidebarItem } from '@/lib/sidebar-navigation'
-import { GroupSidebarContent } from './group-sidebar'
+import { DesktopGroupSidebar, GroupSidebarContent } from './group-sidebar'
 
 const items: SidebarItem[] = [
   {
@@ -72,9 +72,47 @@ describe('GroupSidebarContent', () => {
 
     expect(button).not.toBeNull()
     expect(button?.[1]).toMatch(/aria-label="[^"]*Infrastructure[^"]*12[^"]*"/)
+    expect(button?.[1]).toContain('data-slot="tooltip-trigger"')
+    expect(markup).not.toContain('tabindex="0"')
     expect(button?.[2]).not.toContain('Infrastructure')
     expect(button?.[2]).not.toContain('12')
     expect(button?.[2]).toContain('background-color:#3B82F6')
+  })
+
+  it('keeps a disabled collapsed button native while its tooltip wrapper is focusable', () => {
+    const markup = renderContent({ items: [items[1]], collapsed: true })
+    const disabledButton = markup.match(/<button[^>]*disabled=""[^>]*>/)
+    const tooltipTrigger = markup.match(
+      /<span[^>]*data-slot="tooltip-trigger"[^>]*>/
+    )
+
+    expect(disabledButton).not.toBeNull()
+    expect(tooltipTrigger).not.toBeNull()
+    expect(tooltipTrigger?.[0]).toContain('tabindex="0"')
+    expect(tooltipTrigger?.[0]).toMatch(
+      /aria-label="[^"]*Reference material with a deliberately long group name[^"]*3[^"]*"/
+    )
+    expect(tooltipTrigger?.[0]).toMatch(
+      /title="[^"]*Reference material with a deliberately long group name[^"]*3[^"]*"/
+    )
+  })
+
+  it('uses an explicit eight-pixel radius for item and collapse buttons', () => {
+    const itemMarkup = renderContent({ items: [items[0]] })
+    const desktopMarkup = renderToStaticMarkup(
+      <DesktopGroupSidebar
+        items={[items[0]]}
+        activeGroupId={null}
+        onSelect={vi.fn()}
+      />
+    )
+    const itemButton = itemMarkup.match(/<button[^>]*>/)
+    const collapseButton = desktopMarkup.match(
+      /<button[^>]*aria-label="收起分组侧边栏"[^>]*>/
+    )
+
+    expect(itemButton?.[0]).toContain('rounded-[8px]')
+    expect(collapseButton?.[0]).toContain('rounded-[8px]')
   })
 
   it('renders a concise empty state only when expanded', () => {

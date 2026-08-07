@@ -65,7 +65,7 @@ export function GroupSidebarContent({
             disabled={item.disabled}
             onClick={() => onSelect(item.id)}
             className={cn(
-              'relative flex h-9 w-full min-w-0 items-center rounded-md text-sm outline-none',
+              'relative flex h-9 w-full min-w-0 items-center rounded-[8px] text-sm outline-none',
               'hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
               'disabled:pointer-events-none disabled:opacity-45',
               collapsed ? 'justify-center px-0' : 'gap-2 px-3',
@@ -100,7 +100,20 @@ export function GroupSidebarContent({
           <li key={item.id}>
             {collapsed ? (
               <Tooltip>
-                <TooltipTrigger asChild>{button}</TooltipTrigger>
+                {item.disabled ? (
+                  <TooltipTrigger asChild>
+                    <span
+                      tabIndex={0}
+                      aria-label={label}
+                      title={label}
+                      className="block w-full rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {button}
+                    </span>
+                  </TooltipTrigger>
+                ) : (
+                  <TooltipTrigger asChild>{button}</TooltipTrigger>
+                )}
                 <TooltipContent side="right" sideOffset={8}>
                   {label}
                 </TooltipContent>
@@ -160,7 +173,7 @@ export function DesktopGroupSidebar(props: DesktopGroupSidebarProps) {
               aria-expanded={!collapsed}
               onClick={handleToggle}
               className={cn(
-                'flex size-9 items-center justify-center rounded-md text-muted-foreground outline-none',
+                'flex size-9 items-center justify-center rounded-[8px] text-muted-foreground outline-none',
                 'hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
                 collapsed ? 'mx-auto' : 'ml-auto'
               )}
