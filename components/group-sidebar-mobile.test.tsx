@@ -166,6 +166,35 @@ function installAnimationFrame() {
   }
 }
 
+interface TestTouchPoint {
+  identifier: number
+  clientX: number
+  clientY: number
+}
+
+function touch(
+  identifier: number,
+  clientX: number,
+  clientY: number
+): TestTouchPoint {
+  return { identifier, clientX, clientY }
+}
+
+function dispatchTouchEvent(
+  type: 'touchstart' | 'touchmove' | 'touchend' | 'touchcancel',
+  touches: TestTouchPoint[],
+  changedTouches = touches
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperties(event, {
+    touches: { configurable: true, value: touches },
+    changedTouches: { configurable: true, value: changedTouches },
+  })
+
+  act(() => window.dispatchEvent(event))
+  return event
+}
+
 let desktopMedia: ReturnType<typeof installMatchMedia>
 
 function renderDrawer(
@@ -197,19 +226,6 @@ function renderDrawer(
 }
 
 beforeEach(() => {
-  vi.stubGlobal(
-    'PointerEvent',
-    class PointerEvent extends MouseEvent {
-      readonly pointerId: number
-      readonly pointerType: string
-
-      constructor(type: string, init: PointerEventInit = {}) {
-        super(type, init)
-        this.pointerId = init.pointerId ?? 0
-        this.pointerType = init.pointerType ?? ''
-      }
-    }
-  )
   desktopMedia = installMatchMedia(false)
 })
 
@@ -396,113 +412,101 @@ describe('MobileGroupDrawer', () => {
     expect(edge.className).toContain('fixed')
     expect(edge.className).toContain('top-14')
     expect(edge.className).toContain('w-5')
-    expect(edge.className).toContain('touch-pan-y')
     expect(edge.className).toContain('lg:hidden')
     expect(edge.className).toContain('pointer-events-none')
 
-    fireEvent.pointerDown(window, {
-      pointerId: 7,
-      pointerType: 'touch',
-      clientX: 0,
-      clientY: 100,
-    })
-    fireEvent.pointerMove(window, {
-      pointerId: 7,
-      pointerType: 'touch',
-      clientX: 48,
-      clientY: 132,
-    })
+    dispatchTouchEvent('touchstart', [touch(7, 0, 100)])
+    const intentMove = dispatchTouchEvent('touchmove', [touch(7, 10, 101)])
+    const thresholdMove = dispatchTouchEvent('touchmove', [
+      touch(7, 48, 132),
+    ])
 
+    expect(intentMove.defaultPrevented).toBe(true)
+    expect(thresholdMove.defaultPrevented).toBe(true)
     expect(onOpenChange).toHaveBeenCalledTimes(1)
     expect(onOpenChange).toHaveBeenCalledWith(true)
+  })
+
+  it('registers touch movement as non-passive', () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener')
+
+    renderDrawer()
+
+    const touchMoveCall = addEventListener.mock.calls.find(
+      ([eventType]) => eventType === 'touchmove'
+    )
+    expect(touchMoveCall?.[1]).toEqual(expect.any(Function))
+    expect(touchMoveCall?.[2]).toEqual(
+      expect.objectContaining({ passive: false })
+    )
   })
 
   it.each([
     {
       name: 'short swipe',
-      pointerType: 'touch',
       start: [0, 100],
       end: [47, 100],
     },
     {
       name: 'leftward swipe',
-      pointerType: 'touch',
       start: [20, 100],
       end: [0, 100],
     },
     {
-      name: 'mouse drag',
-      pointerType: 'mouse',
-      start: [0, 100],
-      end: [60, 100],
-    },
-    {
       name: 'swipe with excessive vertical drift',
-      pointerType: 'touch',
       start: [0, 100],
       end: [60, 133],
     },
-    {
-      name: 'touch starting outside the edge',
-      pointerType: 'touch',
-      start: [21, 100],
-      end: [80, 100],
-    },
-  ])('ignores a $name', ({ pointerType, start, end }) => {
+  ])('ignores a $name', ({ start, end }) => {
     const { onOpenChange } = renderDrawer()
 
-    fireEvent.pointerDown(window, {
-      pointerId: 3,
-      pointerType,
-      clientX: start[0],
-      clientY: start[1],
-    })
-    fireEvent.pointerMove(window, {
-      pointerId: 3,
-      pointerType,
-      clientX: end[0],
-      clientY: end[1],
-    })
-    fireEvent.pointerUp(window, {
-      pointerId: 3,
-      pointerType,
-      clientX: end[0],
-      clientY: end[1],
-    })
+    dispatchTouchEvent('touchstart', [touch(3, start[0], start[1])])
+    dispatchTouchEvent('touchmove', [touch(3, end[0], end[1])])
+    dispatchTouchEvent('touchend', [], [touch(3, end[0], end[1])])
 
     expect(onOpenChange).not.toHaveBeenCalled()
   })
 
-  it.each(['pointerup', 'pointercancel', 'blur'] as const)(
+  it('abandons vertical scrolling without preventing it', () => {
+    const { onOpenChange } = renderDrawer()
+
+    dispatchTouchEvent('touchstart', [touch(4, 0, 100)])
+    const verticalMove = dispatchTouchEvent('touchmove', [
+      touch(4, 4, 112),
+    ])
+    const laterMove = dispatchTouchEvent('touchmove', [touch(4, 60, 112)])
+
+    expect(verticalMove.defaultPrevented).toBe(false)
+    expect(laterMove.defaultPrevented).toBe(false)
+    expect(onOpenChange).not.toHaveBeenCalled()
+  })
+
+  it('ignores touches starting outside the edge without preventing them', () => {
+    const { onOpenChange } = renderDrawer()
+
+    dispatchTouchEvent('touchstart', [touch(6, 21, 100)])
+    const move = dispatchTouchEvent('touchmove', [touch(6, 80, 100)])
+
+    expect(move.defaultPrevented).toBe(false)
+    expect(onOpenChange).not.toHaveBeenCalled()
+  })
+
+  it.each(['touchend', 'touchcancel', 'blur'] as const)(
     'resets a pending edge swipe on %s',
     (resetEvent) => {
       const { onOpenChange } = renderDrawer()
 
-      fireEvent.pointerDown(window, {
-        pointerId: 5,
-        pointerType: 'touch',
-        clientX: 0,
-        clientY: 100,
-      })
+      dispatchTouchEvent('touchstart', [touch(5, 0, 100)])
       if (resetEvent === 'blur') {
         fireEvent.blur(window)
       } else {
-        fireEvent[resetEvent === 'pointerup' ? 'pointerUp' : 'pointerCancel'](
-          window,
-          {
-            pointerId: 5,
-            pointerType: 'touch',
-            clientX: 10,
-            clientY: 100,
-          }
+        dispatchTouchEvent(
+          resetEvent,
+          [],
+          [touch(5, 10, 100)]
         )
       }
-      fireEvent.pointerMove(window, {
-        pointerId: 5,
-        pointerType: 'touch',
-        clientX: 60,
-        clientY: 100,
-      })
+      dispatchTouchEvent('touchmove', [touch(5, 60, 100)])
 
       expect(onOpenChange).not.toHaveBeenCalled()
     }
@@ -511,20 +515,10 @@ describe('MobileGroupDrawer', () => {
   it('clears stale gesture state whenever open state changes', () => {
     const { onOpenChange, rerenderDrawer } = renderDrawer()
 
-    fireEvent.pointerDown(window, {
-      pointerId: 8,
-      pointerType: 'touch',
-      clientX: 0,
-      clientY: 100,
-    })
+    dispatchTouchEvent('touchstart', [touch(8, 0, 100)])
     rerenderDrawer({ open: true })
     rerenderDrawer({ open: false })
-    fireEvent.pointerMove(window, {
-      pointerId: 8,
-      pointerType: 'touch',
-      clientX: 60,
-      clientY: 100,
-    })
+    dispatchTouchEvent('touchmove', [touch(8, 60, 100)])
 
     expect(onOpenChange).not.toHaveBeenCalled()
   })
@@ -532,20 +526,10 @@ describe('MobileGroupDrawer', () => {
   it('clears stale gesture state whenever desktop state changes', () => {
     const { onOpenChange } = renderDrawer()
 
-    fireEvent.pointerDown(window, {
-      pointerId: 9,
-      pointerType: 'touch',
-      clientX: 0,
-      clientY: 100,
-    })
+    dispatchTouchEvent('touchstart', [touch(9, 0, 100)])
     act(() => desktopMedia.setMatches(true))
     act(() => desktopMedia.setMatches(false))
-    fireEvent.pointerMove(window, {
-      pointerId: 9,
-      pointerType: 'touch',
-      clientX: 60,
-      clientY: 100,
-    })
+    dispatchTouchEvent('touchmove', [touch(9, 60, 100)])
 
     expect(onOpenChange).not.toHaveBeenCalled()
   })
@@ -554,28 +538,39 @@ describe('MobileGroupDrawer', () => {
     const addEventListener = vi.spyOn(window, 'addEventListener')
     const removeEventListener = vi.spyOn(window, 'removeEventListener')
     const { unmount } = renderDrawer()
-    const eventTypes = [
-      'pointerdown',
-      'pointermove',
-      'pointerup',
-      'pointercancel',
-      'blur',
+    const touchEventTypes = [
+      'touchstart',
+      'touchmove',
+      'touchend',
+      'touchcancel',
     ] as const
-    const listeners = eventTypes.map((eventType) => ({
+    const touchListeners = touchEventTypes.map((eventType) => ({
       eventType,
-      listener: addEventListener.mock.calls.find(
+      registration: addEventListener.mock.calls.find(
         ([registeredType]) => registeredType === eventType
-      )?.[1],
+      ),
     }))
+    const blurListener = addEventListener.mock.calls.find(
+      ([registeredType]) => registeredType === 'blur'
+    )?.[1]
 
-    for (const { listener } of listeners) {
-      expect(listener).toEqual(expect.any(Function))
+    for (const { registration } of touchListeners) {
+      expect(registration?.[1]).toEqual(expect.any(Function))
+      expect(registration?.[2]).toEqual(
+        expect.objectContaining({ passive: false })
+      )
     }
+    expect(blurListener).toEqual(expect.any(Function))
 
     unmount()
 
-    for (const { eventType, listener } of listeners) {
-      expect(removeEventListener).toHaveBeenCalledWith(eventType, listener)
+    for (const { eventType, registration } of touchListeners) {
+      expect(removeEventListener).toHaveBeenCalledWith(
+        eventType,
+        registration?.[1],
+        registration?.[2]
+      )
     }
+    expect(removeEventListener).toHaveBeenCalledWith('blur', blurListener)
   })
 })

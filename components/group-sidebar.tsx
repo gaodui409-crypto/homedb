@@ -46,13 +46,28 @@ export interface MobileGroupDrawerProps extends GroupSidebarContentProps {
   triggerRef: RefObject<HTMLButtonElement | null>
 }
 
-interface TouchPointerStart {
-  pointerId: number
+interface EdgeTouchStart {
+  identifier: number
+  horizontalIntent: boolean
   x: number
   y: number
 }
 
 const DESKTOP_MEDIA_QUERY = '(min-width: 1024px)'
+const EDGE_SWIPE_WIDTH = 20
+const EDGE_SWIPE_OPEN_DISTANCE = 48
+const EDGE_SWIPE_MAX_VERTICAL_DRIFT = 32
+const EDGE_SWIPE_INTENT_DISTANCE = 8
+const TOUCH_LISTENER_OPTIONS: AddEventListenerOptions = { passive: false }
+
+function findTouch(touches: TouchList, identifier: number): Touch | null {
+  for (let index = 0; index < touches.length; index += 1) {
+    const touch = touches[index]
+    if (touch?.identifier === identifier) return touch
+  }
+
+  return null
+}
 
 function subscribeToDesktop(onStoreChange: () => void): () => void {
   if (
@@ -267,7 +282,7 @@ export function MobileGroupDrawer({
   onSelect,
   triggerRef,
 }: MobileGroupDrawerProps) {
-  const touchPointer = useRef<TouchPointerStart | null>(null)
+  const edgeTouch = useRef<EdgeTouchStart | null>(null)
   const selectionFrame = useRef<number | null>(null)
   const isDesktop = useIsDesktop()
   const effectiveOpen = open && !isDesktop
@@ -277,65 +292,110 @@ export function MobileGroupDrawer({
   }, [isDesktop, onOpenChange, open])
 
   useEffect(() => {
-    touchPointer.current = null
+    edgeTouch.current = null
     if (open || isDesktop) return
 
-    function handlePointerDown(event: PointerEvent) {
-      if (
-        event.pointerType !== 'touch' ||
-        event.clientX > 20 ||
-        touchPointer.current !== null
-      ) {
-        return
-      }
+    function handleTouchStart(event: TouchEvent) {
+      edgeTouch.current = null
+      if (event.touches.length !== 1) return
 
-      touchPointer.current = {
-        pointerId: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
+      const start = event.touches[0]
+      if (!start || start.clientX > EDGE_SWIPE_WIDTH) return
+
+      edgeTouch.current = {
+        identifier: start.identifier,
+        horizontalIntent: false,
+        x: start.clientX,
+        y: start.clientY,
       }
     }
 
-    function handlePointerMove(event: PointerEvent) {
-      const start = touchPointer.current
-      if (start === null || start.pointerId !== event.pointerId) return
+    function handleTouchMove(event: TouchEvent) {
+      const start = edgeTouch.current
+      if (start === null) return
 
-      const dx = event.clientX - start.x
-      const dy = Math.abs(event.clientY - start.y)
-
-      if (dy > 32) {
-        touchPointer.current = null
+      if (event.touches.length !== 1) {
+        edgeTouch.current = null
         return
       }
 
-      if (dx >= 48) {
-        touchPointer.current = null
+      const current = findTouch(event.touches, start.identifier)
+      if (current === null) {
+        edgeTouch.current = null
+        return
+      }
+
+      const dx = current.clientX - start.x
+      const dy = Math.abs(current.clientY - start.y)
+      const absoluteDx = Math.abs(dx)
+
+      if (dy > EDGE_SWIPE_MAX_VERTICAL_DRIFT) {
+        edgeTouch.current = null
+        return
+      }
+
+      if (!start.horizontalIntent) {
+        if (Math.max(absoluteDx, dy) < EDGE_SWIPE_INTENT_DISTANCE) return
+
+        if (dx <= 0 || dy >= absoluteDx) {
+          edgeTouch.current = null
+          return
+        }
+
+        start.horizontalIntent = true
+      }
+
+      event.preventDefault()
+
+      if (dx >= EDGE_SWIPE_OPEN_DISTANCE) {
+        edgeTouch.current = null
         onOpenChange(true)
       }
     }
 
-    function handlePointerEnd(event: PointerEvent) {
-      if (touchPointer.current?.pointerId === event.pointerId) {
-        touchPointer.current = null
+    function handleTouchEnd(event: TouchEvent) {
+      const start = edgeTouch.current
+      if (
+        start !== null &&
+        (findTouch(event.changedTouches, start.identifier) !== null ||
+          findTouch(event.touches, start.identifier) === null)
+      ) {
+        edgeTouch.current = null
       }
     }
 
     function handleBlur() {
-      touchPointer.current = null
+      edgeTouch.current = null
     }
 
-    window.addEventListener('pointerdown', handlePointerDown)
-    window.addEventListener('pointermove', handlePointerMove)
-    window.addEventListener('pointerup', handlePointerEnd)
-    window.addEventListener('pointercancel', handlePointerEnd)
+    window.addEventListener('touchstart', handleTouchStart, TOUCH_LISTENER_OPTIONS)
+    window.addEventListener('touchmove', handleTouchMove, TOUCH_LISTENER_OPTIONS)
+    window.addEventListener('touchend', handleTouchEnd, TOUCH_LISTENER_OPTIONS)
+    window.addEventListener('touchcancel', handleTouchEnd, TOUCH_LISTENER_OPTIONS)
     window.addEventListener('blur', handleBlur)
 
     return () => {
-      touchPointer.current = null
-      window.removeEventListener('pointerdown', handlePointerDown)
-      window.removeEventListener('pointermove', handlePointerMove)
-      window.removeEventListener('pointerup', handlePointerEnd)
-      window.removeEventListener('pointercancel', handlePointerEnd)
+      edgeTouch.current = null
+      window.removeEventListener(
+        'touchstart',
+        handleTouchStart,
+        TOUCH_LISTENER_OPTIONS
+      )
+      window.removeEventListener(
+        'touchmove',
+        handleTouchMove,
+        TOUCH_LISTENER_OPTIONS
+      )
+      window.removeEventListener(
+        'touchend',
+        handleTouchEnd,
+        TOUCH_LISTENER_OPTIONS
+      )
+      window.removeEventListener(
+        'touchcancel',
+        handleTouchEnd,
+        TOUCH_LISTENER_OPTIONS
+      )
       window.removeEventListener('blur', handleBlur)
     }
   }, [isDesktop, onOpenChange, open])
@@ -403,7 +463,7 @@ export function MobileGroupDrawer({
         <div
           aria-hidden="true"
           data-testid="mobile-group-drawer-edge"
-          className="pointer-events-none fixed bottom-0 left-0 top-14 z-20 w-5 touch-pan-y lg:hidden"
+          className="pointer-events-none fixed bottom-0 left-0 top-14 z-20 w-5 lg:hidden"
         />
       )}
     </>
