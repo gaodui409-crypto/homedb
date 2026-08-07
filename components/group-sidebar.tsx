@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
 import {
@@ -14,6 +14,13 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from '@/components/ui/drawer'
 
 export interface GroupSidebarContentProps {
   items: SidebarItem[]
@@ -26,6 +33,17 @@ export type DesktopGroupSidebarProps = Omit<
   GroupSidebarContentProps,
   'collapsed'
 >
+
+export interface MobileGroupDrawerProps extends GroupSidebarContentProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+interface TouchPointerStart {
+  pointerId: number
+  x: number
+  y: number
+}
 
 function getInitialCollapsedState(): boolean {
   if (typeof window === 'undefined') return false
@@ -197,5 +215,100 @@ export function DesktopGroupSidebar(props: DesktopGroupSidebarProps) {
         </Tooltip>
       </div>
     </aside>
+  )
+}
+
+export function MobileGroupDrawer({
+  items,
+  activeGroupId,
+  open,
+  onOpenChange,
+  onSelect,
+}: MobileGroupDrawerProps) {
+  const touchPointer = useRef<TouchPointerStart | null>(null)
+
+  function releaseTouchPointer(event: ReactPointerEvent<HTMLDivElement>) {
+    if (touchPointer.current?.pointerId !== event.pointerId) return
+
+    touchPointer.current = null
+    event.currentTarget.releasePointerCapture?.(event.pointerId)
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.pointerType !== 'touch' || touchPointer.current !== null) return
+
+    touchPointer.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+    }
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  }
+
+  function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const start = touchPointer.current
+    if (start === null || start.pointerId !== event.pointerId) return
+
+    const dx = event.clientX - start.x
+    const dy = Math.abs(event.clientY - start.y)
+
+    if (dy > 32) {
+      releaseTouchPointer(event)
+      return
+    }
+
+    if (dx >= 48) {
+      releaseTouchPointer(event)
+      onOpenChange(true)
+    }
+  }
+
+  function handleSelect(id: string) {
+    onOpenChange(false)
+    requestAnimationFrame(() => onSelect(id))
+  }
+
+  return (
+    <>
+      <Drawer open={open} onOpenChange={onOpenChange} direction="left">
+        <DrawerContent
+          className={cn(
+            'h-full w-[min(78vw,320px)] max-w-[320px] sm:max-w-[320px] lg:hidden',
+            'data-[vaul-drawer-direction=left]:w-[min(78vw,320px)]',
+            'data-[vaul-drawer-direction=left]:sm:max-w-[320px]'
+          )}
+        >
+          <DrawerHeader className="shrink-0 border-b">
+            <DrawerTitle>分组</DrawerTitle>
+            <DrawerDescription className="sr-only">
+              选择分组后将跳转到对应的书签区域。
+            </DrawerDescription>
+          </DrawerHeader>
+          <nav
+            aria-label="书签分组"
+            className="min-h-0 flex-1 overflow-y-auto py-3"
+          >
+            <GroupSidebarContent
+              items={items}
+              activeGroupId={activeGroupId}
+              collapsed={false}
+              onSelect={handleSelect}
+            />
+          </nav>
+        </DrawerContent>
+      </Drawer>
+
+      {!open && (
+        <div
+          aria-hidden="true"
+          data-testid="mobile-group-drawer-edge"
+          className="fixed bottom-0 left-0 top-14 z-20 w-5 touch-pan-y lg:hidden"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={releaseTouchPointer}
+          onPointerCancel={releaseTouchPointer}
+        />
+      )}
+    </>
   )
 }

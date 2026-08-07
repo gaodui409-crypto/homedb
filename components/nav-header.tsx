@@ -3,7 +3,7 @@
 import { useRef, useState } from 'react'
 import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
-  Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud,
+  Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, Menu,
 } from 'lucide-react'
 import type { Theme, NavData } from '@/lib/types'
 import { normalizeImportData } from '@/lib/nav-data'
@@ -13,6 +13,8 @@ interface NavHeaderProps {
   theme: Theme
   adminMode: boolean
   syncing?: boolean
+  navigationOpen?: boolean
+  onNavigationOpenChange?: (open: boolean) => void
   onThemeChange: (t: Theme) => void
   onTitleChange: (t: string) => void
   onAdminToggle: () => void
@@ -33,6 +35,8 @@ export function NavHeader({
   theme,
   adminMode,
   syncing,
+  navigationOpen = false,
+  onNavigationOpenChange,
   onThemeChange,
   onTitleChange,
   onAdminToggle,
@@ -74,6 +78,18 @@ export function NavHeader({
     <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3 h-14">
+          {onNavigationOpenChange && (
+            <button
+              type="button"
+              aria-label="打开分组导航"
+              aria-expanded={navigationOpen}
+              onClick={() => onNavigationOpenChange(true)}
+              className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+            >
+              <Menu aria-hidden="true" className="size-4" />
+            </button>
+          )}
+
           {/* Title */}
           <div className="flex-1 flex items-center gap-2 min-w-0">
             {editingTitle ? (
