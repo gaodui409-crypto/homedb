@@ -6,6 +6,7 @@ import {
   normalizeSearchQuery,
   readSidebarCollapsed,
   resolveActiveGroupId,
+  selectClosestVisibleGroup,
   writeSidebarCollapsed,
 } from './sidebar-navigation'
 import type { Group } from './types'
@@ -79,6 +80,21 @@ describe('sidebar navigation', () => {
     expect(resolveActiveGroupId(['vps', 'docs'], 'docs')).toBe('docs')
     expect(resolveActiveGroupId(['vps', 'docs'], 'missing')).toBe('vps')
     expect(resolveActiveGroupId([], 'missing')).toBeNull()
+  })
+
+  it('selects the intersecting group closest to the sticky header', () => {
+    expect(selectClosestVisibleGroup([
+      { id: 'vps', top: -180, isIntersecting: true },
+      { id: 'docs', top: 118, isIntersecting: true },
+    ], 112)).toBe('docs')
+    expect(selectClosestVisibleGroup([], 112)).toBeNull()
+  })
+
+  it('ignores non-intersecting groups when selecting the closest group', () => {
+    expect(selectClosestVisibleGroup([
+      { id: 'vps', top: 112, isIntersecting: false },
+      { id: 'docs', top: 140, isIntersecting: true },
+    ], 112)).toBe('docs')
   })
 
   it('normalizes shared search queries', () => {

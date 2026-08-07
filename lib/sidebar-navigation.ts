@@ -47,6 +47,26 @@ export function resolveActiveGroupId(
   return groupIds[0] ?? null
 }
 
+export function selectClosestVisibleGroup(
+  entries: Array<{ id: string; top: number; isIntersecting: boolean }>,
+  anchorTop: number
+): string | null {
+  let closestId: string | null = null
+  let closestDistance = Number.POSITIVE_INFINITY
+
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue
+
+    const distance = Math.abs(entry.top - anchorTop)
+    if (distance < closestDistance) {
+      closestId = entry.id
+      closestDistance = distance
+    }
+  }
+
+  return closestId
+}
+
 export function readSidebarCollapsed(storage: Pick<Storage, 'getItem'>): boolean {
   try {
     return storage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
