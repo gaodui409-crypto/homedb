@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { observeActiveGroups } from './use-active-group'
+import {
+  getActiveGroupRootMargin,
+  observeActiveGroups,
+} from './use-active-group'
+
+const ROOT_MARGIN = '-112px 0px -724px 0px'
 
 function createElement(id: string): Element {
   return { id } as Element
@@ -41,6 +46,17 @@ function createObserverHarness() {
   }
 }
 
+describe('getActiveGroupRootMargin', () => {
+  it('builds a 64px activation band below the sticky header', () => {
+    expect(getActiveGroupRootMargin(900)).toBe('-112px 0px -724px 0px')
+    expect(getActiveGroupRootMargin(844)).toBe('-112px 0px -668px 0px')
+  })
+
+  it('clamps the bottom inset for a very short viewport', () => {
+    expect(getActiveGroupRootMargin(160)).toBe('-112px 0px -0px 0px')
+  })
+})
+
 describe('observeActiveGroups', () => {
   it('observes existing group elements and ignores missing elements', () => {
     const vps = createElement('group-vps')
@@ -49,7 +65,7 @@ describe('observeActiveGroups', () => {
     )
     const harness = createObserverHarness()
 
-    observeActiveGroups(['vps', 'missing'], vi.fn(), {
+    observeActiveGroups(['vps', 'missing'], vi.fn(), ROOT_MARGIN, {
       getElementById,
       createObserver: harness.createObserver,
     })
@@ -60,7 +76,7 @@ describe('observeActiveGroups', () => {
     expect(harness.observer.observe).toHaveBeenCalledWith(vps)
     expect(harness.createObserver).toHaveBeenCalledWith(
       expect.any(Function),
-      { rootMargin: '-112px 0px -75% 0px' }
+      { rootMargin: ROOT_MARGIN }
     )
   })
 
@@ -70,7 +86,7 @@ describe('observeActiveGroups', () => {
     const onActive = vi.fn()
     const harness = createObserverHarness()
 
-    observeActiveGroups(['vps', 'docs'], onActive, {
+    observeActiveGroups(['vps', 'docs'], onActive, ROOT_MARGIN, {
       getElementById: (id) => id === 'group-vps' ? vps : docs,
       createObserver: harness.createObserver,
     })
@@ -89,7 +105,7 @@ describe('observeActiveGroups', () => {
     const onActive = vi.fn()
     const harness = createObserverHarness()
 
-    observeActiveGroups(['vps', 'docs'], onActive, {
+    observeActiveGroups(['vps', 'docs'], onActive, ROOT_MARGIN, {
       getElementById: (id) => id === 'group-vps' ? vps : docs,
       createObserver: harness.createObserver,
     })
@@ -103,7 +119,7 @@ describe('observeActiveGroups', () => {
 
   it('disconnects the observer during cleanup', () => {
     const harness = createObserverHarness()
-    const cleanup = observeActiveGroups(['vps'], vi.fn(), {
+    const cleanup = observeActiveGroups(['vps'], vi.fn(), ROOT_MARGIN, {
       getElementById: () => createElement('group-vps'),
       createObserver: harness.createObserver,
     })
@@ -113,9 +129,24 @@ describe('observeActiveGroups', () => {
     expect(harness.observer.disconnect).toHaveBeenCalledTimes(1)
   })
 
+  it('ignores observer callbacks queued before cleanup', () => {
+    const vps = createElement('group-vps')
+    const onActive = vi.fn()
+    const harness = createObserverHarness()
+    const cleanup = observeActiveGroups(['vps'], onActive, ROOT_MARGIN, {
+      getElementById: () => vps,
+      createObserver: harness.createObserver,
+    })
+
+    cleanup()
+    harness.emit([createEntry(vps, 112, true)])
+
+    expect(onActive).not.toHaveBeenCalled()
+  })
+
   it('returns a no-op cleanup when observers are unsupported', () => {
     const getElementById = vi.fn()
-    const cleanup = observeActiveGroups(['vps'], vi.fn(), {
+    const cleanup = observeActiveGroups(['vps'], vi.fn(), ROOT_MARGIN, {
       getElementById,
     })
 
@@ -129,12 +160,12 @@ describe('observeActiveGroups', () => {
     const firstHarness = createObserverHarness()
     const secondHarness = createObserverHarness()
 
-    const cleanupFirst = observeActiveGroups(['vps'], vi.fn(), {
+    const cleanupFirst = observeActiveGroups(['vps'], vi.fn(), ROOT_MARGIN, {
       getElementById: () => vps,
       createObserver: firstHarness.createObserver,
     })
     cleanupFirst()
-    observeActiveGroups(['docs'], vi.fn(), {
+    observeActiveGroups(['docs'], vi.fn(), ROOT_MARGIN, {
       getElementById: () => docs,
       createObserver: secondHarness.createObserver,
     })
