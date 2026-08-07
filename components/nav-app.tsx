@@ -49,6 +49,7 @@ type ActiveDrag =
 
 export function NavApp() {
   const store = useNavStore()
+  const { adminMode, setAdminMode } = store
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
   const [activeDrag, setActiveDrag] = useState<ActiveDrag>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -104,12 +105,12 @@ export function NavApp() {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
         e.preventDefault()
-        store.setAdminMode(!store.adminMode)
+        setAdminMode(!adminMode)
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [store.adminMode, store.setAdminMode])
+  }, [adminMode, setAdminMode])
 
   const handleDragStart = (event: DragStartEvent) => {
     const data = event.active.data.current

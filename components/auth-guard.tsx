@@ -51,8 +51,8 @@ export function AuthGuard({ children }: AuthGuardProps) {
           setStatus('unauthenticated')
         }
       } catch {
-        // On error, try to use existing token anyway
-        setStatus('authenticated')
+        clearToken()
+        setStatus('unauthenticated')
       }
     }
 

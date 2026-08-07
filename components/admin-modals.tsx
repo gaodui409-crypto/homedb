@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import { X, ExternalLink } from 'lucide-react'
 import type { Bookmark, Group } from '@/lib/types'
+import { normalizeHttpUrl } from '@/lib/nav-data'
 
 // ── Shared overlay backdrop ──────────────────────────────────────────────
 function Backdrop({ onClick }: { onClick: () => void }) {
@@ -99,17 +100,22 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
   const [icon, setIcon] = useState(state.bookmark?.icon ?? '')
   const [selectedGroupId, setSelectedGroupId] = useState(state.groupId)
   const [faviconError, setFaviconError] = useState(false)
+  const [urlError, setUrlError] = useState('')
   // Use custom icon if set, otherwise auto-detect favicon
   const previewIconUrl = icon.trim() || getFaviconUrl(url)
-
-  // Reset favicon error when url changes
-  useEffect(() => { setFaviconError(false) }, [url])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || !url.trim()) return
-    const finalUrl = url.startsWith('http') ? url : `https://${url}`
-    onSave(state.groupId, name.trim(), finalUrl, icon.trim(), selectedGroupId)
+    try {
+      const finalUrl = normalizeHttpUrl(url)
+      const finalIcon = icon.trim() ? normalizeHttpUrl(icon) : ''
+      setUrlError('')
+      onSave(state.groupId, name.trim(), finalUrl, finalIcon, selectedGroupId)
+    } catch {
+      setUrlError('网址和图标地址只支持 HTTP 或 HTTPS')
+      return
+    }
     onClose()
   }
 
@@ -166,11 +172,13 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
             className={inputCls}
             type="text"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => { setUrl(e.target.value); setFaviconError(false) }}
             placeholder="https://..."
             required
           />
         </FormField>
+
+        {urlError && <p className="text-xs text-destructive">{urlError}</p>}
 
         <FormField label="自定义图标 URL（可选）">
           <input

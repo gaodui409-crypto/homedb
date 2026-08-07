@@ -36,7 +36,7 @@ function getAvatarColor(name: string): string {
 
 function PinnedItem({ bookmark }: { bookmark: Bookmark }) {
   const [imgError, setImgError] = useState(false)
-  const faviconUrl = getFaviconUrl(bookmark.url)
+  const iconUrl = bookmark.icon || getFaviconUrl(bookmark.url)
   const avatarColor = getAvatarColor(bookmark.name)
 
   return (
@@ -49,11 +49,11 @@ function PinnedItem({ bookmark }: { bookmark: Bookmark }) {
     >
       <div
         className="size-9 rounded-xl overflow-hidden flex items-center justify-center text-white text-sm font-semibold shadow-sm group-hover:scale-105 transition-transform"
-        style={imgError || !faviconUrl ? { backgroundColor: avatarColor } : undefined}
+        style={imgError || !iconUrl ? { backgroundColor: avatarColor } : undefined}
       >
-        {!imgError && faviconUrl ? (
+        {!imgError && iconUrl ? (
           <img
-            src={faviconUrl}
+            src={iconUrl}
             alt={bookmark.name}
             width={36}
             height={36}

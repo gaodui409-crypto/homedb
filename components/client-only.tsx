@@ -1,6 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useSyncExternalStore } from 'react'
+
+const subscribe = () => () => {}
 
 /**
  * Renders children only after the component has mounted on the client.
@@ -10,8 +12,7 @@ export function ClientOnly({ children, fallback = null }: {
   children: React.ReactNode
   fallback?: React.ReactNode
 }) {
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => { setMounted(true) }, [])
+  const mounted = useSyncExternalStore(subscribe, () => true, () => false)
   if (!mounted) return <>{fallback}</>
   return <>{children}</>
 }

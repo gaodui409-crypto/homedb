@@ -8,6 +8,13 @@ import { v4 as uuid } from 'uuid'
 
 import type { Group, Bookmark, Theme, NavData } from './types'
 import { DEFAULT_DATA } from './default-data'
+import { parseStoredNavData } from './nav-data'
+import {
+  decideInitialSync,
+  hasPendingSync,
+  setPendingSync,
+  type CloudDataSource,
+} from './sync-policy'
 
 const STORAGE_KEY = 'mininav_data'
 const THEME_KEY = 'mininav_theme'
@@ -18,8 +25,7 @@ function loadGroups(): Group[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return DEFAULT_DATA
-    const parsed: NavData = JSON.parse(raw)
-    return parsed.groups ?? DEFAULT_DATA
+    return parseStoredNavData(JSON.parse(raw)).groups
   } catch {
     return DEFAULT_DATA
   }
@@ -59,37 +65,48 @@ export function useNavStore() {
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const syncVersionRef = useRef(0)
+  const writeChainRef = useRef<Promise<void>>(Promise.resolve())
 
   const clearSyncError = useCallback(() => setSyncError(null), [])
 
-  const syncToCloud = useCallback((data: Group[]) => {
+  const syncToCloud = useCallback((data: Group[], delay = 500) => {
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current)
     }
-    syncTimeoutRef.current = setTimeout(async () => {
-      try {
-        setSyncing(true)
-        setSyncError(null)
-        const token = getToken()
-        const res = await fetch('/api/data', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          },
-          body: JSON.stringify({ groups: data }),
-        })
-        const result = await res.json()
-        if (!res.ok || !result.success) {
+    const version = ++syncVersionRef.current
+    setPendingSync(localStorage, true)
+
+    syncTimeoutRef.current = setTimeout(() => {
+      syncTimeoutRef.current = null
+      writeChainRef.current = writeChainRef.current.then(async () => {
+        try {
+          setSyncing(true)
+          setSyncError(null)
+          const token = getToken()
+          const res = await fetch('/api/data', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            body: JSON.stringify({ groups: data }),
+          })
+          const result = await res.json()
+          if (!res.ok || !result.success) {
+            throw new Error(result.error || 'Cloud sync failed')
+          }
+          if (version === syncVersionRef.current) {
+            setPendingSync(localStorage, false)
+          }
+        } catch (err) {
+          console.log('[v0] Cloud sync failed:', err)
           setSyncError('云端同步失败')
+        } finally {
+          setSyncing(false)
         }
-      } catch (err) {
-        console.log('[v0] Cloud sync failed:', err)
-        setSyncError('云端同步失败')
-      } finally {
-        setSyncing(false)
-      }
-    }, 500)
+      })
+    }, delay)
   }, [])
 
   useEffect(() => {
@@ -100,36 +117,35 @@ export function useNavStore() {
         const res = await fetch('/api/data', {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         })
-        if (res.ok) {
-          const cloudData = await res.json()
-          console.log('[v0] Cloud data received:', cloudData)
-          
-          if (cloudData.groups && Array.isArray(cloudData.groups)) {
-            const isCloudDefault = cloudData.groups.every((g: Group) => 
-              g.id.startsWith('default-')
-            )
-            
-            const localData = loadGroups()
-            const isLocalDefault = localData.every((g: Group) => 
-              g.id.startsWith('default-')
-            )
-            
-            console.log('[v0] isCloudDefault:', isCloudDefault, 'isLocalDefault:', isLocalDefault)
-            
-            if (isCloudDefault && !isLocalDefault) {
-              console.log('[v0] Cloud is default, local has real data - syncing local to cloud')
-              syncToCloud(localData)
-            } else if (!isCloudDefault) {
-              console.log('[v0] Cloud has real data - updating local')
-              setGroupsState(cloudData.groups)
-              saveGroupsLocal(cloudData.groups)
-            } else {
-              console.log('[v0] Both are default - keeping local')
-            }
-          }
+        if (!res.ok) {
+          setSyncError('云端数据加载失败')
+          return
+        }
+
+        const source = res.headers.get('X-Nav-Data-Source') as CloudDataSource | null
+        if (source !== 'stored' && source !== 'missing' && source !== 'disabled') {
+          setSyncError('云端数据状态无效')
+          return
+        }
+
+        const cloudData = parseStoredNavData(await res.json())
+        const localData = loadGroups()
+        const action = decideInitialSync({
+          source,
+          hasPendingLocal: hasPendingSync(localStorage),
+        })
+
+        if (action === 'upload-local') {
+          syncToCloud(localData, 0)
+        } else if (action === 'use-cloud') {
+          setGroupsState(cloudData.groups)
+          saveGroupsLocal(cloudData.groups)
+        } else {
+          setPendingSync(localStorage, false)
         }
       } catch (err) {
         console.log('[v0] Load from cloud failed:', err)
+        setSyncError('云端数据加载失败')
       }
     }
     loadFromCloud()
@@ -331,44 +347,9 @@ export function useNavStore() {
     URL.revokeObjectURL(url)
   }, [groups])
 
-  const normalizeImportData = useCallback((data: NavData): Group[] => {
-    const defaultColors = [
-      '#3B82F6',
-      '#10B981',
-      '#F59E0B',
-      '#EF4444',
-      '#8B5CF6',
-      '#EC4899',
-      '#06B6D4',
-      '#84CC16',
-    ]
-
-    return (data.groups || []).map((g, gIndex) => {
-      const groupId = g.id || uuid()
-      const groupColor = g.color || defaultColors[gIndex % defaultColors.length]
-
-      const normalizedBookmarks: Bookmark[] = (g.bookmarks || []).map((b, bIndex) => ({
-        id: b.id || uuid(),
-        name: b.name,
-        url: b.url,
-        order: typeof b.order === 'number' ? b.order : bIndex,
-        pinned: b.pinned ?? false,
-        icon: b.icon || undefined,
-      }))
-
-      return {
-        id: groupId,
-        name: g.name,
-        order: typeof g.order === 'number' ? g.order : gIndex,
-        color: groupColor,
-        bookmarks: normalizedBookmarks,
-      }
-    })
-  }, [])
-
   const importData = useCallback(
     (data: NavData, mode: 'overwrite' | 'merge') => {
-      const normalizedGroups = normalizeImportData(data)
+      const normalizedGroups = data.groups
 
       if (mode === 'overwrite') {
         setGroups(normalizedGroups)
@@ -396,7 +377,7 @@ export function useNavStore() {
         })
       }
     },
-    [setGroups, normalizeImportData]
+    [setGroups]
   )
 
   return {
@@ -407,7 +388,7 @@ export function useNavStore() {
     syncing,
     syncError,
     clearSyncError,
-    retrySyncToCloud: () => syncToCloud(groups),
+    retrySyncToCloud: () => syncToCloud(groups, 0),
     setTheme,
     setTitle,
     setAdminMode,

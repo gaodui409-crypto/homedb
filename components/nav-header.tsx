@@ -6,6 +6,7 @@ import {
   Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud,
 } from 'lucide-react'
 import type { Theme, NavData } from '@/lib/types'
+import { normalizeImportData } from '@/lib/nav-data'
 
 interface NavHeaderProps {
   title: string
@@ -58,7 +59,7 @@ export function NavHeader({
     const reader = new FileReader()
     reader.onload = (ev) => {
       try {
-        const data: NavData = JSON.parse(ev.target?.result as string)
+        const data: NavData = normalizeImportData(JSON.parse(ev.target?.result as string))
         onImportFile(data, file.name)
       } catch {
         alert('JSON 文件解析失败，请检查格式。')
