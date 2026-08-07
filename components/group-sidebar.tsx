@@ -1,6 +1,12 @@
 'use client'
 
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 
 import {
@@ -43,6 +49,40 @@ interface TouchPointerStart {
   pointerId: number
   x: number
   y: number
+}
+
+const DESKTOP_MEDIA_QUERY = '(min-width: 1024px)'
+
+function subscribeToDesktop(onStoreChange: () => void): () => void {
+  if (
+    typeof window === 'undefined' ||
+    typeof window.matchMedia !== 'function'
+  ) {
+    return () => {}
+  }
+
+  const mediaQuery = window.matchMedia(DESKTOP_MEDIA_QUERY)
+  mediaQuery.addEventListener('change', onStoreChange)
+  return () => mediaQuery.removeEventListener('change', onStoreChange)
+}
+
+function getDesktopSnapshot(): boolean {
+  return typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function'
+    ? window.matchMedia(DESKTOP_MEDIA_QUERY).matches
+    : false
+}
+
+function getServerDesktopSnapshot(): boolean {
+  return false
+}
+
+function useIsDesktop(): boolean {
+  return useSyncExternalStore(
+    subscribeToDesktop,
+    getDesktopSnapshot,
+    getServerDesktopSnapshot
+  )
 }
 
 function getInitialCollapsedState(): boolean {
@@ -226,6 +266,12 @@ export function MobileGroupDrawer({
   onSelect,
 }: MobileGroupDrawerProps) {
   const touchPointer = useRef<TouchPointerStart | null>(null)
+  const isDesktop = useIsDesktop()
+  const effectiveOpen = open && !isDesktop
+
+  useEffect(() => {
+    if (isDesktop && open) onOpenChange(false)
+  }, [isDesktop, onOpenChange, open])
 
   function releaseTouchPointer(event: ReactPointerEvent<HTMLDivElement>) {
     if (touchPointer.current?.pointerId !== event.pointerId) return
@@ -270,7 +316,11 @@ export function MobileGroupDrawer({
 
   return (
     <>
-      <Drawer open={open} onOpenChange={onOpenChange} direction="left">
+      <Drawer
+        open={effectiveOpen}
+        onOpenChange={onOpenChange}
+        direction="left"
+      >
         <DrawerContent
           className={cn(
             'h-full w-[min(78vw,320px)] max-w-[320px] sm:max-w-[320px] lg:hidden',
@@ -298,7 +348,7 @@ export function MobileGroupDrawer({
         </DrawerContent>
       </Drawer>
 
-      {!open && (
+      {!open && !isDesktop && (
         <div
           aria-hidden="true"
           data-testid="mobile-group-drawer-edge"

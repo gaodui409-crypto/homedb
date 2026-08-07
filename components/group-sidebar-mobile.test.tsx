@@ -1,7 +1,14 @@
 // @vitest-environment jsdom
 
 import type { ComponentProps, ReactNode } from 'react'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -15,7 +22,11 @@ vi.mock('@/components/ui/drawer', () => ({
   }: {
     open: boolean
     children: ReactNode
-  }) => (open ? <>{children}</> : null),
+  }) => (
+    <div data-testid="drawer-root" data-open={open}>
+      {open ? children : null}
+    </div>
+  ),
   DrawerContent: ({ children, ...props }: ComponentProps<'div'>) => (
     <div data-slot="drawer-content" {...props}>
       {children}
@@ -49,6 +60,58 @@ const items: SidebarItem[] = [
   },
 ]
 
+const DESKTOP_MEDIA_QUERY = '(min-width: 1024px)'
+
+function installMatchMedia(initialMatches: boolean) {
+  let matches = initialMatches
+  const listeners = new Set<(event: MediaQueryListEvent) => void>()
+  const addEventListener = vi.fn(
+    (type: string, listener: EventListenerOrEventListenerObject) => {
+      if (type === 'change' && typeof listener === 'function') {
+        listeners.add(listener as (event: MediaQueryListEvent) => void)
+      }
+    }
+  )
+  const removeEventListener = vi.fn(
+    (type: string, listener: EventListenerOrEventListenerObject) => {
+      if (type === 'change' && typeof listener === 'function') {
+        listeners.delete(listener as (event: MediaQueryListEvent) => void)
+      }
+    }
+  )
+  const mediaQueryList = {
+    get matches() {
+      return matches
+    },
+    media: DESKTOP_MEDIA_QUERY,
+    onchange: null,
+    addEventListener,
+    removeEventListener,
+    addListener: vi.fn(),
+    removeListener: vi.fn(),
+    dispatchEvent: vi.fn(() => true),
+  } as unknown as MediaQueryList
+  const matchMedia = vi.fn(() => mediaQueryList)
+
+  vi.stubGlobal('matchMedia', matchMedia)
+
+  return {
+    addEventListener,
+    matchMedia,
+    removeEventListener,
+    setMatches(nextMatches: boolean) {
+      matches = nextMatches
+      const event = {
+        matches,
+        media: DESKTOP_MEDIA_QUERY,
+      } as MediaQueryListEvent
+      for (const listener of listeners) listener(event)
+    },
+  }
+}
+
+let desktopMedia: ReturnType<typeof installMatchMedia>
+
 function renderDrawer(
   overrides: Partial<ComponentProps<typeof MobileGroupDrawer>> = {}
 ) {
@@ -81,6 +144,7 @@ beforeEach(() => {
       }
     }
   )
+  desktopMedia = installMatchMedia(false)
 })
 
 afterEach(() => {
@@ -89,6 +153,49 @@ afterEach(() => {
 })
 
 describe('MobileGroupDrawer', () => {
+  it('keeps Vaul closed and omits mobile UI on desktop despite external open state', () => {
+    desktopMedia.setMatches(true)
+
+    renderDrawer({ open: true })
+
+    expect(screen.getByTestId('drawer-root').getAttribute('data-open')).toBe(
+      'false'
+    )
+    expect(document.querySelector('[data-slot="drawer-content"]')).toBeNull()
+    expect(screen.queryByTestId('mobile-group-drawer-edge')).toBeNull()
+    expect(desktopMedia.matchMedia).toHaveBeenCalledWith(DESKTOP_MEDIA_QUERY)
+  })
+
+  it('normalizes external open state when the viewport changes to desktop', () => {
+    const { onOpenChange } = renderDrawer({ open: true })
+
+    expect(screen.getByTestId('drawer-root').getAttribute('data-open')).toBe(
+      'true'
+    )
+
+    act(() => desktopMedia.setMatches(true))
+
+    expect(screen.getByTestId('drawer-root').getAttribute('data-open')).toBe(
+      'false'
+    )
+    expect(onOpenChange).toHaveBeenCalledTimes(1)
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('removes the desktop media-query listener on unmount', () => {
+    const { unmount } = renderDrawer()
+    const listener = desktopMedia.addEventListener.mock.calls[0]?.[1]
+
+    expect(listener).toEqual(expect.any(Function))
+
+    unmount()
+
+    expect(desktopMedia.removeEventListener).toHaveBeenCalledWith(
+      'change',
+      listener
+    )
+  })
+
   it('renders shared group names and counts in an expanded left drawer', () => {
     renderDrawer({ open: true, activeGroupId: 'infrastructure' })
 
