@@ -165,4 +165,10 @@ html {
   .sidebar-transition {
     transition: none;
   }
+
+  [data-slot="drawer-content"],
+  [data-slot="drawer-overlay"] {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

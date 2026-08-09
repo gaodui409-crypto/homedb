@@ -252,20 +252,20 @@ afterEach(() => {
 })
 
 describe('MobileGroupDrawer with real Vaul primitives', () => {
-  it('autofocuses drawer navigation and restores trigger focus after Escape', async () => {
+  it('autofocuses drawer controls and restores trigger focus after Escape', async () => {
     const user = userEvent.setup()
     const onOpenChange = vi.fn()
     render(<ControlledDrawer onOpenChange={onOpenChange} />)
-    const trigger = screen.getByRole('button', {
-      name: '打开真实分组导航',
-    })
+    const trigger = screen.getByText('打开真实分组导航').closest(
+      'button'
+    ) as HTMLButtonElement
 
     await user.click(trigger)
 
-    const group = await screen.findByRole('button', {
-      name: 'Infrastructure，12 个书签',
+    const closeButton = await screen.findByRole('button', {
+      name: '关闭分组导航',
     })
-    await waitFor(() => expect(document.activeElement).toBe(group))
+    await waitFor(() => expect(document.activeElement).toBe(closeButton))
 
     await user.keyboard('{Escape}')
 
@@ -275,6 +275,80 @@ describe('MobileGroupDrawer with real Vaul primitives', () => {
       { animationName: 'slideToLeft' }
     )
     await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
+  it('provides an explicit close button and restores trigger focus', async () => {
+    const user = userEvent.setup()
+    const onOpenChange = vi.fn()
+    render(<ControlledDrawer initialOpen onOpenChange={onOpenChange} />)
+    const trigger = screen.getByText('打开真实分组导航').closest(
+      'button'
+    ) as HTMLButtonElement
+    const closeButton = await screen.findByRole('button', {
+      name: '关闭分组导航',
+    })
+    const content = document.querySelector(
+      '[data-slot="drawer-content"]'
+    ) as HTMLElement
+    content.style.transform = 'matrix(1, 0, 0, 1, 0, 0)'
+
+    await user.click(closeButton)
+
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+    fireEvent.animationEnd(
+      document.querySelector('[data-slot="drawer-content"]') as HTMLElement,
+      { animationName: 'slideToLeft' }
+    )
+    await waitFor(() => expect(document.activeElement).toBe(trigger))
+  })
+
+  it('closes after a leftward pointer swipe', async () => {
+    const onOpenChange = vi.fn()
+    render(<ControlledDrawer initialOpen onOpenChange={onOpenChange} />)
+
+    const content = await waitFor(() => {
+      const element = document.querySelector(
+        '[data-slot="drawer-content"]'
+      ) as HTMLElement | null
+      expect(element).not.toBeNull()
+      return element as HTMLElement
+    })
+    vi.spyOn(content, 'getBoundingClientRect').mockReturnValue({
+      bottom: 844,
+      height: 844,
+      left: 0,
+      right: 320,
+      top: 0,
+      width: 320,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    })
+    content.style.transform = 'matrix(1, 0, 0, 1, 0, 0)'
+
+    fireEvent.pointerDown(content, {
+      clientX: 280,
+      clientY: 300,
+      pointerId: 1,
+      pointerType: 'touch',
+    })
+    fireEvent.pointerMove(content, {
+      clientX: 40,
+      clientY: 302,
+      pointerId: 1,
+      pointerType: 'touch',
+    })
+    expect(content.classList).toContain('vaul-dragging')
+    // Browsers expose the computed translate3d as a matrix; jsdom does not.
+    content.style.transform = 'matrix(1, 0, 0, 1, -240, 0)'
+    fireEvent.pointerUp(content, {
+      clientX: 40,
+      clientY: 302,
+      pointerId: 1,
+      pointerType: 'touch',
+    })
+
+    expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
   it('removes real drawer content and overlay after an overlay close', async () => {

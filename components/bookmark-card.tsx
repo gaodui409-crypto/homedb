@@ -9,6 +9,7 @@ import type { Bookmark } from '@/lib/types'
 interface BookmarkCardProps {
   bookmark: Bookmark
   adminMode: boolean
+  dragEnabled?: boolean
   onEdit: (bookmark: Bookmark) => void
   onDelete: (id: string) => void
   onTogglePin?: (id: string) => void
@@ -51,6 +52,7 @@ function getAvatarColor(name: string): string {
 export function BookmarkCard({
   bookmark,
   adminMode,
+  dragEnabled = adminMode,
   onEdit,
   onDelete,
   onTogglePin,
@@ -69,7 +71,7 @@ export function BookmarkCard({
     isDragging,
   } = useSortable({
     id: bookmark.id,
-    disabled: !adminMode,
+    disabled: !dragEnabled,
     data: { type: 'bookmark', bookmark },
   })
 
@@ -92,7 +94,7 @@ export function BookmarkCard({
     <div
       ref={setNodeRef}
       style={style}
-      {...(adminMode ? { ...attributes, ...listeners } : {})}
+      {...(dragEnabled ? { ...attributes, ...listeners } : {})}
       className={`nav-card group relative flex items-center gap-3 rounded-xl bg-card p-3 select-none transition-all duration-200 cursor-pointer ${isDragging ? 'ring-2 ring-primary/40' : ''}`}
       onClick={handleClick}
       role="link"

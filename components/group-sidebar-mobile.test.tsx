@@ -58,6 +58,7 @@ vi.mock('@/components/ui/drawer', () => ({
       </div>
     )
   },
+  DrawerClose: ({ children }: { children: ReactNode }) => children,
   DrawerHeader: ({ children, ...props }: ComponentProps<'div'>) => (
     <div {...props}>{children}</div>
   ),
@@ -284,6 +285,21 @@ describe('MobileGroupDrawer', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
+  it('does not restore focus to the hidden trigger after switching to desktop', () => {
+    const triggerRef = createRef<HTMLButtonElement>()
+    render(<button ref={triggerRef}>Navigation trigger</button>)
+    renderDrawer({ open: true, triggerRef })
+    const closeAutoFocus = drawerMockState.onCloseAutoFocus
+    const focus = vi.spyOn(triggerRef.current as HTMLButtonElement, 'focus')
+    const preventDefault = vi.fn()
+
+    act(() => desktopMedia.setMatches(true))
+    act(() => closeAutoFocus?.({ preventDefault }))
+
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(focus).not.toHaveBeenCalled()
+  })
+
   it('removes the desktop media-query listener on unmount', () => {
     const { unmount } = renderDrawer()
     const listener = desktopMedia.addEventListener.mock.calls[0]?.[1]
@@ -326,7 +342,7 @@ describe('MobileGroupDrawer', () => {
     expect(content?.className).toContain(
       'data-[vaul-drawer-direction=left]:sm:max-w-[320px]'
     )
-    expect(content?.className).toContain('lg:hidden')
+    expect(content?.className).not.toContain('lg:hidden')
     expect(screen.queryByTestId('mobile-group-drawer-edge')).toBeNull()
   })
 
@@ -421,10 +437,34 @@ describe('MobileGroupDrawer', () => {
       touch(7, 48, 132),
     ])
 
-    expect(intentMove.defaultPrevented).toBe(true)
+    expect(intentMove.defaultPrevented).toBe(false)
     expect(thresholdMove.defaultPrevented).toBe(true)
     expect(onOpenChange).toHaveBeenCalledTimes(1)
     expect(onOpenChange).toHaveBeenCalledWith(true)
+  })
+
+  it('ignores edge swipes that begin inside the sticky header', () => {
+    const { onOpenChange } = renderDrawer()
+
+    dispatchTouchEvent('touchstart', [touch(10, 0, 40)])
+    const move = dispatchTouchEvent('touchmove', [touch(10, 60, 40)])
+
+    expect(move.defaultPrevented).toBe(false)
+    expect(onOpenChange).not.toHaveBeenCalled()
+  })
+
+  it('releases a gesture when vertical movement overtakes a small rightward jitter', () => {
+    const { onOpenChange } = renderDrawer()
+
+    dispatchTouchEvent('touchstart', [touch(11, 0, 100)])
+    const jitter = dispatchTouchEvent('touchmove', [touch(11, 10, 101)])
+    const verticalMove = dispatchTouchEvent('touchmove', [touch(11, 11, 120)])
+    const laterMove = dispatchTouchEvent('touchmove', [touch(11, 60, 120)])
+
+    expect(jitter.defaultPrevented).toBe(false)
+    expect(verticalMove.defaultPrevented).toBe(false)
+    expect(laterMove.defaultPrevented).toBe(false)
+    expect(onOpenChange).not.toHaveBeenCalled()
   })
 
   it('registers touch movement as non-passive', () => {

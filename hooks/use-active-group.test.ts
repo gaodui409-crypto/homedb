@@ -3,12 +3,16 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   getActiveGroupRootMargin,
   observeActiveGroups,
+  resolveStickyAnchorTop,
 } from './use-active-group'
 
 const ROOT_MARGIN = '-112px 0px -724px 0px'
 
-function createElement(id: string): Element {
-  return { id } as Element
+function createElement(id: string, getTop: () => number = () => 0): Element {
+  return {
+    id,
+    getBoundingClientRect: () => ({ top: getTop() }),
+  } as Element
 }
 
 function createEntry(
@@ -55,6 +59,21 @@ describe('getActiveGroupRootMargin', () => {
   it('clamps the bottom inset for a very short viewport', () => {
     expect(getActiveGroupRootMargin(160)).toBe('-112px 0px -0px 0px')
   })
+
+  it('accounts for an expanded sticky quick-access row', () => {
+    expect(getActiveGroupRootMargin(900, 176)).toBe('-176px 0px -660px 0px')
+  })
+})
+
+describe('resolveStickyAnchorTop', () => {
+  it('keeps the legacy minimum while honoring taller sticky content', () => {
+    expect(resolveStickyAnchorTop([56, 104])).toBe(112)
+    expect(resolveStickyAnchorTop([56, 144])).toBe(144)
+  })
+
+  it('ignores invalid measurements and falls back to the minimum', () => {
+    expect(resolveStickyAnchorTop([Number.NaN, 0])).toBe(112)
+  })
 })
 
 describe('observeActiveGroups', () => {
@@ -81,8 +100,8 @@ describe('observeActiveGroups', () => {
   })
 
   it('activates the closest intersecting entry in the current batch', () => {
-    const vps = createElement('group-vps')
-    const docs = createElement('group-docs')
+    const vps = createElement('group-vps', () => -180)
+    const docs = createElement('group-docs', () => 118)
     const onActive = vi.fn()
     const harness = createObserverHarness()
 
@@ -97,6 +116,51 @@ describe('observeActiveGroups', () => {
 
     expect(onActive).toHaveBeenCalledTimes(1)
     expect(onActive).toHaveBeenCalledWith('docs')
+  })
+
+  it('uses the measured sticky anchor when choosing the active entry', () => {
+    const vps = createElement('group-vps', () => 112)
+    const docs = createElement('group-docs', () => 170)
+    const onActive = vi.fn()
+    const harness = createObserverHarness()
+
+    observeActiveGroups(['vps', 'docs'], onActive, ROOT_MARGIN, {
+      getElementById: (id) => id === 'group-vps' ? vps : docs,
+      createObserver: harness.createObserver,
+    }, 176)
+    harness.emit([
+      createEntry(vps, 112, true),
+      createEntry(docs, 170, true),
+    ])
+
+    expect(onActive).toHaveBeenCalledWith('docs')
+  })
+
+  it('keeps intersecting state across incremental observer callbacks', () => {
+    let vpsTop = -300
+    let docsTop = 118
+    const vps = createElement('group-vps', () => vpsTop)
+    const docs = createElement('group-docs', () => docsTop)
+    const onActive = vi.fn()
+    const harness = createObserverHarness()
+
+    observeActiveGroups(['vps', 'docs'], onActive, ROOT_MARGIN, {
+      getElementById: (id) => id === 'group-vps' ? vps : docs,
+      createObserver: harness.createObserver,
+    })
+
+    harness.emit([createEntry(docs, docsTop, true)])
+    expect(onActive).toHaveBeenLastCalledWith('docs')
+
+    onActive.mockClear()
+    harness.emit([createEntry(vps, vpsTop, true)])
+    expect(onActive).not.toHaveBeenCalled()
+
+    onActive.mockClear()
+    vpsTop = 112
+    docsTop = 300
+    harness.emit([createEntry(docs, docsTop, false)])
+    expect(onActive).toHaveBeenLastCalledWith('vps')
   })
 
   it('preserves the active group for an all-nonintersecting batch', () => {
@@ -115,6 +179,56 @@ describe('observeActiveGroups', () => {
     harness.emit([createEntry(docs, 400, false)])
 
     expect(onActive).not.toHaveBeenCalled()
+  })
+
+  it('activates the last group when a scrollable page reaches the bottom', () => {
+    let scrollListener: () => void = () => {
+      throw new Error('scroll listener was not registered')
+    }
+    const addEventListener = vi.fn((type: string, listener: () => void) => {
+      if (type === 'scroll') scrollListener = listener
+    })
+    const removeEventListener = vi.fn()
+    const testWindow = {
+      innerHeight: 844,
+      scrollY: 0,
+      addEventListener,
+      removeEventListener,
+    }
+    vi.stubGlobal('window', testWindow)
+    vi.stubGlobal('document', {
+      documentElement: { scrollHeight: 1050 },
+    })
+
+    const vps = createElement('group-vps', () => -68)
+    const docs = createElement('group-docs', () => 588)
+    const onActive = vi.fn()
+    const harness = createObserverHarness()
+    const cleanup = observeActiveGroups(
+      ['vps', 'docs'],
+      onActive,
+      ROOT_MARGIN,
+      {
+        getElementById: (id) => id === 'group-vps' ? vps : docs,
+        createObserver: harness.createObserver,
+      }
+    )
+
+    harness.emit([createEntry(vps, -68, true)])
+    expect(onActive).toHaveBeenLastCalledWith('vps')
+
+    onActive.mockClear()
+    testWindow.scrollY = 206
+    scrollListener()
+
+    expect(onActive).toHaveBeenCalledWith('docs')
+
+    cleanup()
+    expect(removeEventListener).toHaveBeenCalledWith(
+      'scroll',
+      scrollListener
+    )
+    vi.unstubAllGlobals()
   })
 
   it('disconnects the observer during cleanup', () => {

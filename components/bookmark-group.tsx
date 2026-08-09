@@ -10,6 +10,7 @@ import type { Group, Bookmark } from '@/lib/types'
 interface BookmarkGroupProps {
   group: Group
   adminMode: boolean
+  dragEnabled?: boolean
   onAddBookmark: (groupId: string) => void
   onEditBookmark: (groupId: string, bookmark: Bookmark) => void
   onDeleteBookmark: (groupId: string, bookmarkId: string) => void
@@ -20,6 +21,7 @@ interface BookmarkGroupProps {
 
 // Sortable wrapper for the entire group section (for group reorder)
 export function SortableGroup(props: BookmarkGroupProps) {
+  const dragEnabled = props.dragEnabled ?? props.adminMode
   const {
     attributes,
     listeners,
@@ -29,7 +31,7 @@ export function SortableGroup(props: BookmarkGroupProps) {
     isDragging,
   } = useSortable({
     id: props.group.id,
-    disabled: !props.adminMode,
+    disabled: !dragEnabled,
     data: { type: 'group' },
   })
 
@@ -44,7 +46,8 @@ export function SortableGroup(props: BookmarkGroupProps) {
     <div ref={setNodeRef} style={style}>
       <BookmarkGroup
         {...props}
-        dragHandleProps={props.adminMode ? { ...attributes, ...listeners } : undefined}
+        dragEnabled={dragEnabled}
+        dragHandleProps={dragEnabled ? { ...attributes, ...listeners } : undefined}
         isDragging={isDragging}
       />
     </div>
@@ -59,6 +62,7 @@ interface InternalGroupProps extends BookmarkGroupProps {
 function BookmarkGroup({
   group,
   adminMode,
+  dragEnabled = adminMode,
   onAddBookmark,
   onEditBookmark,
   onDeleteBookmark,
@@ -74,12 +78,15 @@ function BookmarkGroup({
   // Make the group section a droppable zone for cross-group drops
   const { setNodeRef: setDropRef, isOver } = useDroppable({
     id: `group-drop-${group.id}`,
+    disabled: !dragEnabled,
     data: { type: 'group-drop', groupId: group.id },
   })
 
   return (
     <section
       id={`group-${group.id}`}
+      data-group-id={group.id}
+      style={{ scrollMarginTop: 'var(--sticky-navigation-offset, 7rem)' }}
       className={`rounded-2xl transition-all duration-200 scroll-mt-28 ${
         isDragging ? 'ring-2 ring-primary/30 shadow-lg' : ''
       } ${isOver ? 'ring-2 ring-primary ring-offset-2 bg-primary/5' : ''}`}
@@ -142,6 +149,7 @@ function BookmarkGroup({
                 key={bm.id}
                 bookmark={bm}
                 adminMode={adminMode}
+                dragEnabled={dragEnabled}
                 onEdit={(b) => onEditBookmark(group.id, b)}
                 onDelete={(id) => onDeleteBookmark(group.id, id)}
                 onTogglePin={(id) => onTogglePin(group.id, id)}

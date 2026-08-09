@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { hydrateRoot } from 'react-dom/client'
+import { renderToString } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -141,15 +143,15 @@ describe('GroupSidebarContent', () => {
       collapsed: true,
     })
     const trigger = screen.getByRole('button', { name: disabledLabel })
-    const innerButton = trigger.querySelector('button') as HTMLButtonElement | null
 
-    expect(trigger.tagName).toBe('SPAN')
+    expect(trigger.tagName).toBe('BUTTON')
     expect(trigger.getAttribute('aria-disabled')).toBe('true')
-    expect(trigger.getAttribute('tabindex')).toBe('0')
+    expect((trigger as HTMLButtonElement).tabIndex).toBe(0)
     expect(trigger.hasAttribute('title')).toBe(false)
     expect(screen.getAllByRole('button', { name: disabledLabel })).toHaveLength(1)
-    expect(innerButton?.disabled).toBe(true)
-    expect(container.querySelectorAll('[tabindex="0"]')).toHaveLength(1)
+    expect((trigger as HTMLButtonElement).disabled).toBe(false)
+    expect(trigger.querySelector('button')).toBeNull()
+    expect(container.querySelectorAll('button[aria-disabled="true"]')).toHaveLength(1)
 
     await user.tab()
 
@@ -157,7 +159,6 @@ describe('GroupSidebarContent', () => {
     expect((await screen.findByRole('tooltip')).textContent).toBe(disabledLabel)
 
     await user.click(trigger)
-    if (innerButton) await user.click(innerButton)
 
     expect(onSelect).not.toHaveBeenCalled()
   })
@@ -227,14 +228,33 @@ describe('DesktopGroupSidebar', () => {
     expect(window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY)).toBeNull()
   })
 
-  it('restores persisted collapsed state on initial render', () => {
+  it('hydrates the server-safe expanded shell before restoring persisted state', async () => {
+    window.localStorage.clear()
+    const container = document.createElement('div')
+    container.innerHTML = renderToString(
+      <DesktopGroupSidebar items={items} activeGroupId={null} onSelect={vi.fn()} />
+    )
+    document.body.append(container)
+
+    expect(
+      within(container).getByRole('button', { name: '收起分组侧边栏' })
+    ).toBeTruthy()
+
     window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, '1')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const root = hydrateRoot(
+      container,
+      <DesktopGroupSidebar items={items} activeGroupId={null} onSelect={vi.fn()} />
+    )
 
-    renderDesktop()
-
-    expect(screen.getByRole('button', { name: '展开分组侧边栏' })).toBeTruthy()
-    expect(screen.getByLabelText('分组侧边栏').className).toContain('w-14')
-    expect(screen.queryByRole('heading', { name: '分组' })).toBeNull()
+    await waitFor(() => {
+      expect(
+        within(container).getByRole('button', { name: '展开分组侧边栏' })
+      ).toBeTruthy()
+    })
+    expect(consoleError.mock.calls.flat().join(' ')).not.toContain('Hydration')
+    expect(within(container).getByLabelText('分组侧边栏').className).toContain('w-14')
+    root.unmount()
   })
 
   it('keeps the in-memory toggle when storage writes fail', async () => {

@@ -88,7 +88,10 @@ export function NavHeader({
   }
 
   return (
-    <header className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border">
+    <header
+      data-nav-header="true"
+      className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border"
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3 h-14">
           {onNavigationOpenChange && navigationTriggerRef && (

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef, type CSSProperties } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -24,6 +24,15 @@ import { NavHeader } from '@/components/nav-header'
 import { SortableGroup } from '@/components/bookmark-group'
 import { BookmarkCard } from '@/components/bookmark-card'
 import { QuickBar } from '@/components/quick-bar'
+import {
+  DesktopGroupSidebar,
+  MobileGroupDrawer,
+} from '@/components/group-sidebar'
+import { useActiveGroup } from '@/hooks/use-active-group'
+import {
+  buildSidebarItems,
+  normalizeSearchQuery,
+} from '@/lib/sidebar-navigation'
 import {
   BookmarkModal,
   GroupModal,
@@ -53,16 +62,23 @@ export function NavApp() {
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
   const [activeDrag, setActiveDrag] = useState<ActiveDrag>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [navigationOpen, setNavigationOpen] = useState(false)
+  const navigationTriggerRef = useRef<HTMLButtonElement>(null)
 
   const sortedGroups = useMemo(
     () => [...store.groups].sort((a, b) => a.order - b.order),
     [store.groups]
   )
 
+  const normalizedSearchQuery = useMemo(
+    () => normalizeSearchQuery(searchQuery),
+    [searchQuery]
+  )
+
   // Filter groups and bookmarks based on search query
   const filteredGroups = useMemo(() => {
-    if (!searchQuery.trim()) return sortedGroups
-    const q = searchQuery.toLowerCase()
+    if (!normalizedSearchQuery) return sortedGroups
+    const q = normalizedSearchQuery
     return sortedGroups
       .map((group) => ({
         ...group,
@@ -73,9 +89,24 @@ export function NavApp() {
         ),
       }))
       .filter((group) => group.bookmarks.length > 0)
-  }, [sortedGroups, searchQuery])
+  }, [normalizedSearchQuery, sortedGroups])
 
-  const groupIds = useMemo(() => sortedGroups.map((g) => g.id), [sortedGroups])
+  const sidebarItems = useMemo(
+    () => buildSidebarItems(sortedGroups, searchQuery),
+    [searchQuery, sortedGroups]
+  )
+
+  const visibleGroupIds = useMemo(
+    () => sidebarItems.filter((item) => !item.disabled).map((item) => item.id),
+    [sidebarItems]
+  )
+
+  const {
+    activeGroupId,
+    setActiveGroupId,
+    stickyAnchorTop,
+  } = useActiveGroup(visibleGroupIds)
+  const dragEnabled = store.adminMode && normalizedSearchQuery.length === 0
 
   const pinnedBookmarks = useMemo(() => {
     const result: { bookmark: Bookmark; groupId: string }[] = []
@@ -100,6 +131,20 @@ export function NavApp() {
     window.location.reload()
   }
 
+  const handleGroupSelect = (id: string) => {
+    const target = document.getElementById(`group-${id}`)
+    if (!target) return
+
+    setActiveGroupId(id)
+    const prefersReducedMotion =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    target.scrollIntoView({
+      behavior: prefersReducedMotion ? 'auto' : 'smooth',
+      block: 'start',
+    })
+  }
+
   // Keyboard shortcut: Ctrl+Shift+A (or Cmd+Shift+A) to toggle admin mode
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -113,6 +158,8 @@ export function NavApp() {
   }, [adminMode, setAdminMode])
 
   const handleDragStart = (event: DragStartEvent) => {
+    if (!dragEnabled) return
+
     const data = event.active.data.current
     if (data?.type === 'group') {
       const group = store.groups.find((g) => g.id === event.active.id)
@@ -126,6 +173,8 @@ export function NavApp() {
   }
 
   const handleDragOver = (event: DragOverEvent) => {
+    if (!dragEnabled) return
+
     const { active, over } = event
     if (!over || !activeDrag || activeDrag.type !== 'bookmark') return
 
@@ -161,6 +210,7 @@ export function NavApp() {
     const { active, over } = event
     setActiveDrag(null)
 
+    if (!dragEnabled) return
     if (!over || active.id === over.id) return
 
     const activeId = String(active.id)
@@ -191,7 +241,12 @@ export function NavApp() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div
+      className="min-h-screen bg-background"
+      style={{
+        '--sticky-navigation-offset': `${stickyAnchorTop + 16}px`,
+      } as CSSProperties}
+    >
       <NavHeader
         title={store.title}
         theme={store.theme}
@@ -206,17 +261,36 @@ export function NavApp() {
           setModal({ type: 'importMode', data, fileName })
         }
         onLogout={handleLogout}
+        navigationOpen={navigationOpen}
+        onNavigationOpenChange={setNavigationOpen}
+        navigationTriggerRef={navigationTriggerRef}
       />
 
-      <QuickBar
-        groups={sortedGroups}
-        pinnedBookmarks={pinnedBookmarks}
-        adminMode={store.adminMode}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
+      <MobileGroupDrawer
+        items={sidebarItems}
+        activeGroupId={activeGroupId}
+        open={navigationOpen}
+        onOpenChange={setNavigationOpen}
+        onSelect={handleGroupSelect}
+        triggerRef={navigationTriggerRef}
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="flex items-start">
+        <DesktopGroupSidebar
+          items={sidebarItems}
+          activeGroupId={activeGroupId}
+          onSelect={handleGroupSelect}
+        />
+
+        <div className="min-w-0 flex-1">
+          <QuickBar
+            pinnedBookmarks={pinnedBookmarks}
+            adminMode={store.adminMode}
+            searchQuery={searchQuery}
+            onSearchChange={setSearchQuery}
+          />
+
+          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {store.adminMode && (
           <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary/10 border border-primary/20 text-primary text-sm font-medium">
             <span className="size-2 rounded-full bg-primary inline-block" />
@@ -224,7 +298,7 @@ export function NavApp() {
           </div>
         )}
 
-        {filteredGroups.length === 0 && !searchQuery ? (
+        {filteredGroups.length === 0 && !normalizedSearchQuery ? (
           <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
             <p className="text-muted-foreground text-base">暂无书签分组</p>
             {store.adminMode && (
@@ -236,7 +310,7 @@ export function NavApp() {
               </button>
             )}
           </div>
-        ) : filteredGroups.length === 0 && searchQuery ? (
+        ) : filteredGroups.length === 0 && normalizedSearchQuery ? (
           <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
             <p className="text-muted-foreground text-base">
               未找到匹配「{searchQuery}」的书签
@@ -256,13 +330,14 @@ export function NavApp() {
             onDragOver={handleDragOver}
             onDragEnd={handleDragEnd}
           >
-            <SortableContext items={groupIds} strategy={verticalListSortingStrategy}>
+            <SortableContext items={visibleGroupIds} strategy={verticalListSortingStrategy}>
               <div className="flex flex-col gap-8">
                 {filteredGroups.map((group) => (
                   <SortableGroup
                     key={group.id}
                     group={group}
                     adminMode={store.adminMode}
+                    dragEnabled={dragEnabled}
                     onAddBookmark={(gId) => setModal({ type: 'addBookmark', groupId: gId })}
                     onEditBookmark={(gId, bm) =>
                       setModal({ type: 'editBookmark', groupId: gId, bookmark: bm })
@@ -284,7 +359,7 @@ export function NavApp() {
                   />
                 ))}
 
-                {store.adminMode && !searchQuery && (
+                {store.adminMode && !normalizedSearchQuery && (
                   <button
                     onClick={() => setModal({ type: 'addGroup' })}
                     className="w-full rounded-2xl border-2 border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary transition-colors py-5 text-sm flex items-center justify-center gap-2"
@@ -326,13 +401,15 @@ export function NavApp() {
             </DragOverlay>
           </DndContext>
         )}
-      </main>
+          </main>
 
-      <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center">
-        <p className="text-xs text-muted-foreground">
-          MiniNav v0.3 · 数据{store.syncing ? '同步中' : '已同步'} · <a href="https://github.com/gaodui409/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
-        </p>
-      </footer>
+          <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center">
+            <p className="text-xs text-muted-foreground">
+              MiniNav v0.3 · 数据{store.syncing ? '同步中' : '已同步'} · <a href="https://github.com/gaodui409/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
+            </p>
+          </footer>
+        </div>
+      </div>
 
       {/* Modals */}
       {(modal.type === 'addBookmark' || modal.type === 'editBookmark') && (

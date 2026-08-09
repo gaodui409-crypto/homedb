@@ -2,10 +2,9 @@
 
 import { useState } from 'react'
 import { Search, X } from 'lucide-react'
-import type { Group, Bookmark } from '@/lib/types'
+import type { Bookmark } from '@/lib/types'
 
 interface QuickBarProps {
-  groups: Group[]
   pinnedBookmarks: { bookmark: Bookmark; groupId: string }[]
   adminMode: boolean
   searchQuery: string
@@ -71,37 +70,24 @@ function PinnedItem({ bookmark }: { bookmark: Bookmark }) {
   )
 }
 
-export function QuickBar({ groups, pinnedBookmarks, adminMode, searchQuery, onSearchChange }: QuickBarProps) {
+export function QuickBar({ pinnedBookmarks, adminMode, searchQuery, onSearchChange }: QuickBarProps) {
   const hasPinned = pinnedBookmarks.length > 0
+  const hasSearch = searchQuery.trim().length > 0
 
   return (
-    <div className="sticky top-14 z-30 border-b border-border bg-background/95 backdrop-blur-sm supports-[backdrop-filter]:bg-background/80">
+    <div
+      data-sticky-navigation="true"
+      className="sticky top-14 z-30 border-b border-border bg-background/95 backdrop-blur-sm supports-[backdrop-filter]:bg-background/80"
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Group anchor nav + Search */}
-        <div className="flex items-center gap-2 py-2">
-          {/* Group links - scrollable */}
-          <div className="flex-1 flex items-center gap-1 overflow-x-auto scrollbar-none min-w-0">
-            {groups.map((group) => (
-              <a
-                key={group.id}
-                href={`#group-${group.id}`}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent transition-colors whitespace-nowrap flex-shrink-0"
-              >
-                <span
-                  className="size-2 rounded-full flex-shrink-0"
-                  style={{ backgroundColor: group.color }}
-                />
-                {group.name}
-              </a>
-            ))}
-          </div>
-
-          {/* Search box */}
+        {/* Search box */}
+        <div data-search-row="true" className="flex items-center justify-end gap-2 py-2">
           <div className="relative flex-shrink-0">
             <div className="flex items-center h-8 rounded-lg border border-border bg-background overflow-hidden transition-all focus-within:ring-2 focus-within:ring-primary/30">
               <Search size={14} className="ml-2.5 text-muted-foreground flex-shrink-0" />
               <input
                 type="text"
+                aria-label="搜索书签"
                 placeholder="搜索书签..."
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
@@ -121,7 +107,7 @@ export function QuickBar({ groups, pinnedBookmarks, adminMode, searchQuery, onSe
         </div>
 
         {/* Pinned / Quick-access row */}
-        {(hasPinned || adminMode) && !searchQuery && (
+        {(hasPinned || adminMode) && !hasSearch && (
           <div className="pb-2">
             <div className="flex items-center gap-0.5 overflow-x-auto scrollbar-none">
               {hasPinned ? (

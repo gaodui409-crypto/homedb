@@ -7,7 +7,7 @@ import {
   useSyncExternalStore,
   type RefObject,
 } from 'react'
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
 
 import {
   readSidebarCollapsed,
@@ -22,6 +22,7 @@ import {
 } from '@/components/ui/tooltip'
 import {
   Drawer,
+  DrawerClose,
   DrawerContent,
   DrawerDescription,
   DrawerHeader,
@@ -54,10 +55,11 @@ interface EdgeTouchStart {
 }
 
 const DESKTOP_MEDIA_QUERY = '(min-width: 1024px)'
+const EDGE_SWIPE_TOP = 56
 const EDGE_SWIPE_WIDTH = 20
 const EDGE_SWIPE_OPEN_DISTANCE = 48
 const EDGE_SWIPE_MAX_VERTICAL_DRIFT = 32
-const EDGE_SWIPE_INTENT_DISTANCE = 8
+const EDGE_SWIPE_INTENT_DISTANCE = 16
 const TOUCH_LISTENER_OPTIONS: AddEventListenerOptions = { passive: false }
 
 function findTouch(touches: TouchList, identifier: number): Touch | null {
@@ -135,18 +137,20 @@ export function GroupSidebarContent({
       {items.map((item) => {
         const active = item.id === activeGroupId
         const label = getItemLabel(item)
+        const unavailableInCollapsed = collapsed && item.disabled
         const button = (
           <button
             type="button"
             aria-label={label}
-            aria-hidden={collapsed && item.disabled ? true : undefined}
+            aria-disabled={unavailableInCollapsed ? true : undefined}
             aria-current={active ? 'location' : undefined}
-            disabled={item.disabled}
-            onClick={() => onSelect(item.id)}
+            disabled={item.disabled && !unavailableInCollapsed}
+            onClick={item.disabled ? undefined : () => onSelect(item.id)}
             className={cn(
               'relative flex h-9 w-full min-w-0 items-center rounded-[8px] text-sm outline-none',
               'hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
               'disabled:pointer-events-none disabled:opacity-45',
+              'aria-disabled:cursor-not-allowed aria-disabled:opacity-45',
               collapsed ? 'justify-center px-0' : 'gap-2 px-3',
               active && [
                 'bg-accent font-medium text-accent-foreground',
@@ -179,21 +183,7 @@ export function GroupSidebarContent({
           <li key={item.id}>
             {collapsed ? (
               <Tooltip>
-                {item.disabled ? (
-                  <TooltipTrigger asChild>
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      aria-label={label}
-                      aria-disabled="true"
-                      className="block w-full rounded-[8px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      {button}
-                    </span>
-                  </TooltipTrigger>
-                ) : (
-                  <TooltipTrigger asChild>{button}</TooltipTrigger>
-                )}
+                <TooltipTrigger asChild>{button}</TooltipTrigger>
                 <TooltipContent side="right" sideOffset={8}>
                   {label}
                 </TooltipContent>
@@ -207,7 +197,13 @@ export function GroupSidebarContent({
 }
 
 export function DesktopGroupSidebar(props: DesktopGroupSidebarProps) {
-  const [collapsed, setCollapsed] = useState(getInitialCollapsedState)
+  const [collapsed, setCollapsed] = useState(false)
+
+  useEffect(() => {
+    // Keep the first client render identical to the server-rendered shell.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCollapsed(getInitialCollapsedState())
+  }, [])
 
   const toggleLabel = collapsed ? '展开分组侧边栏' : '收起分组侧边栏'
 
@@ -300,7 +296,11 @@ export function MobileGroupDrawer({
       if (event.touches.length !== 1) return
 
       const start = event.touches[0]
-      if (!start || start.clientX > EDGE_SWIPE_WIDTH) return
+      if (
+        !start ||
+        start.clientX > EDGE_SWIPE_WIDTH ||
+        start.clientY < EDGE_SWIPE_TOP
+      ) return
 
       edgeTouch.current = {
         identifier: start.identifier,
@@ -335,14 +335,19 @@ export function MobileGroupDrawer({
       }
 
       if (!start.horizontalIntent) {
-        if (Math.max(absoluteDx, dy) < EDGE_SWIPE_INTENT_DISTANCE) return
-
         if (dx <= 0 || dy >= absoluteDx) {
           edgeTouch.current = null
           return
         }
 
+        if (Math.max(absoluteDx, dy) < EDGE_SWIPE_INTENT_DISTANCE) return
+
         start.horizontalIntent = true
+      }
+
+      if (dx <= 0 || dy >= absoluteDx) {
+        edgeTouch.current = null
+        return
       }
 
       event.preventDefault()
@@ -431,16 +436,28 @@ export function MobileGroupDrawer({
         <DrawerContent
           onCloseAutoFocus={(event) => {
             event.preventDefault()
-            triggerRef.current?.focus()
+            if (!getDesktopSnapshot()) triggerRef.current?.focus()
           }}
           className={cn(
-            'h-full w-[min(78vw,320px)] max-w-[320px] sm:max-w-[320px] lg:hidden',
+            'h-full w-[min(78vw,320px)] max-w-[320px] sm:max-w-[320px]',
             'data-[vaul-drawer-direction=left]:w-[min(78vw,320px)]',
             'data-[vaul-drawer-direction=left]:sm:max-w-[320px]'
           )}
         >
-          <DrawerHeader className="shrink-0 border-b">
+          <DrawerHeader className="shrink-0 flex-row items-center justify-between border-b">
             <DrawerTitle>分组</DrawerTitle>
+            <DrawerClose asChild>
+              <button
+                type="button"
+                aria-label="关闭分组导航"
+                className={cn(
+                  'flex size-8 shrink-0 items-center justify-center rounded-[8px] text-muted-foreground outline-none',
+                  'hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring'
+                )}
+              >
+                <X aria-hidden="true" className="size-4" />
+              </button>
+            </DrawerClose>
             <DrawerDescription className="sr-only">
               选择分组后将跳转到对应的书签区域。
             </DrawerDescription>
