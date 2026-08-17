@@ -45,6 +45,10 @@ export function BookmarkNote({ note }: BookmarkNoteProps) {
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.stopPropagation()
+            return
+          }
           if (event.key !== 'Escape') return
           event.preventDefault()
           event.stopPropagation()

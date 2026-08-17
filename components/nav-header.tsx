@@ -120,6 +120,10 @@ export function NavHeader({
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const matchedThemeIndex = THEMES.findIndex(({ key }) => key === theme)
+  const currentThemeIndex = matchedThemeIndex >= 0 ? matchedThemeIndex : 0
+  const currentTheme = THEMES[currentThemeIndex]
+  const nextTheme = THEMES[(currentThemeIndex + 1) % THEMES.length]
 
   const commitTitle = () => {
     const trimmed = draftTitle.trim()
@@ -208,7 +212,7 @@ export function NavHeader({
               className="size-[22px] shrink-0"
             />
             {editingTitle ? (
-              <div className="flex items-center gap-1.5 flex-1 min-w-0 max-w-xs">
+              <div className="hidden flex-1 min-w-0 max-w-xs items-center gap-1.5 sm:flex">
                 <input
                   className="flex-1 min-w-0 bg-transparent border-b-2 border-primary text-lg font-semibold text-foreground focus:outline-none"
                   value={draftTitle}
@@ -236,14 +240,14 @@ export function NavHeader({
                 </button>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 group/title">
-                <h1 className="text-lg font-semibold text-foreground truncate">
+              <div className="group/title flex min-w-0 items-center gap-1.5">
+                <h1 className="sr-only font-semibold text-foreground sm:not-sr-only sm:min-w-0 sm:truncate sm:text-lg">
                   {title}
                 </h1>
                 {adminMode && (
                   <button
                     onClick={() => { setDraftTitle(title); setEditingTitle(true) }}
-                    className="size-6 flex items-center justify-center rounded text-muted-foreground opacity-0 group-hover/title:opacity-100 hover:text-foreground hover:bg-accent transition-all"
+                    className="hidden size-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/title:opacity-100 sm:flex"
                     aria-label="编辑标题"
                     title="编辑标题"
                   >
@@ -272,7 +276,7 @@ export function NavHeader({
           </button>
 
           {/* Right actions */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5">
             {/* Admin actions */}
             {adminMode && (
               <>
@@ -368,19 +372,31 @@ export function NavHeader({
             </button>
 
             {/* Theme switcher */}
-            <div className="flex items-center rounded-lg border border-border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => onThemeChange(nextTheme.key)}
+              className="flex size-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:hidden"
+              title={`切换主题，当前${currentTheme.label}`}
+              aria-label={`切换主题，当前${currentTheme.label}`}
+            >
+              {currentTheme.icon}
+            </button>
+            <div
+              data-testid="desktop-theme-switcher"
+              className="hidden items-center overflow-hidden rounded-lg border border-border sm:flex"
+            >
               {THEMES.map(({ key, icon, label }) => (
                 <button
                   key={key}
                   onClick={() => onThemeChange(key)}
                   className={`h-8 w-8 flex items-center justify-center transition-colors ${
-                    theme === key
+                    currentTheme.key === key
                       ? 'bg-primary text-primary-foreground'
                       : 'text-muted-foreground hover:text-foreground hover:bg-accent'
                   }`}
                   title={label}
                   aria-label={label}
-                  aria-pressed={theme === key}
+                  aria-pressed={currentTheme.key === key}
                 >
                   {icon}
                 </button>

@@ -116,6 +116,24 @@ describe('BookmarkCard note', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 
+  it('keeps keyboard note activation from opening the bookmark', async () => {
+    const user = userEvent.setup()
+    const { onOpen } = renderCard({ ...baseBookmark, note: '维护入口' })
+    const noteButton = screen.getByRole('button', { name: '查看备注' })
+
+    noteButton.focus()
+    await user.keyboard('{Enter}')
+    expect(screen.getByRole('tooltip')).toBeTruthy()
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(window.open).not.toHaveBeenCalled()
+
+    await user.keyboard('{Escape}')
+    await user.keyboard(' ')
+    expect(screen.getByRole('tooltip')).toBeTruthy()
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(window.open).not.toHaveBeenCalled()
+  })
+
   it('opens the bookmark when the card itself is activated', () => {
     const { onOpen } = renderCard({ ...baseBookmark, note: '维护入口' })
 

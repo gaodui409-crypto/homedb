@@ -1,122 +1,163 @@
-# MiniNav - 迷你导航页
+# MiniNav
 
-个人书签导航站，支持分组管理、拖拽排序、多主题切换、密码保护、云端同步。
+> 自用的个人书签导航站，电脑浏览器为主，手机用于白天临时查找和打开网站。
 
-## 功能特性
+## 当前定位
 
-- **分组管理**：创建、编辑、删除、拖拽排序书签分组
-- **分组折叠**：点击分组标题折叠/展开，折叠状态随云端同步
-- **书签管理**：添加、编辑、删除、跨组拖拽排序
-- **书签备注**：为每个书签添加备注说明，卡片上直接显示
-- **三种主题**：日间 / 阅读 / 深夜模式
-- **背景自定义**：支持预设纯色和自定义壁纸图片（保存在本设备）
-- **访问密码**：通过环境变量设置密码保护
-- **云端同步**：使用 Vercel Blob 存储数据，多设备同步
-- **JSON 导入导出**：支持简洁格式导入，自动生成 id 和 order
-- **智能图标**：自动抓取网站 favicon，抓取失败时回退首字母配色头像
-- **内置图标**：7 个 VPS/服务器场景图标（服务器、数据库、云服务、终端、存储、安全、监控）
-- **自定义图标**：支持为每个书签指定图标 URL
-- **点击统计**：记录书签点击次数，高频书签自动进入常用栏
-- **响应式布局**：移动端 1 列，平板 2 列，桌面 3-4 列
-- **搜索过滤**：实时搜索书签
-- **常用应用栏**：置顶书签 + 最常访问快速入口
-- **键盘快捷键**：Ctrl+Shift+A（Mac: Cmd+Shift+A）切换管理模式
-- **Sticky 导航**：Header 和分类导航栏滚动时固定在顶部
+- 当前版本：`0.4.0`
+- 分组和书签顺序由手动维护，不会根据访问频率自动调整。
+- 电脑端使用左侧分组导航，手机端使用滑动抽屉切换分组。
+- 顶部只保留一层 56px 菜单栏，搜索框已合并到菜单栏。
+- 书签打开次数达到 3 次时显示火苗；“重点”图钉只是标记，不改变排序。
+- 卡片第二行始终显示网址域名。备注在电脑端悬浮或聚焦时显示，在手机端轻触备注图标后显示。
 
-## 部署方式一：Vercel（推荐）
+## 日常使用
 
-1. Fork 本仓库到你的 GitHub
-2. 在 Vercel 导入项目，Framework 选 Next.js
-3. 在 Vercel Dashboard → Storage → Create Store → Blob，创建 Blob 存储（自动注入 `BLOB_READ_WRITE_TOKEN`）
-4. 在 Settings → Environment Variables 添加 `NAV_PASSWORD`（你的访问密码）
-5. 点击 Deploy，绑定自定义域名
-6. 访问域名，输入密码，开始使用
+1. 在顶部搜索框输入站点名或网址，卡片会实时过滤；左侧分组会显示命中数量并禁用零命中分组。
+2. 点击书签卡片会在新标签页打开，并累计打开次数。
+3. 点击右上角齿轮进入管理模式，可新建、编辑、删除、拖拽排序和标记重点。
+4. 管理模式也可用 `Ctrl+Shift+A` 切换，macOS 使用 `Cmd+Shift+A`。
+5. 数据异常或大改前先在管理模式中导出 `mininav-export.json`。
 
-## 部署方式二：本地开发
+## 本地测试工具
 
-```bash
-# 克隆项目
-git clone https://github.com/your-username/homedb.git
-cd homedb
+项目根目录的 `test-homedb.bat` 是日常入口，双击后按数字选择：
 
-# 安装依赖
-pnpm install
+| 选项 | 用途 | 内容 |
+| --- | --- | --- |
+| `1` | 快速检查 | Vitest + TypeScript + ESLint |
+| `2` | 完整门禁 | 快速检查 + Next.js 生产构建 |
+| `3` | 开发预览 | 自动选择从 3000 开始的空闲端口，启动开发服务器并打开浏览器 |
+| `4` | 生产预览 | 构建后自动选择空闲端口，启动 `next start` 并打开浏览器 |
+| `5` | 监听测试 | 在独立窗口持续运行 Vitest |
 
-# 启动开发服务器
-pnpm dev
+- 如果缺少 `node_modules`，BAT 会按锁文件执行 `pnpm install --frozen-lockfile`。
+- 预览服务器运行在独立窗口，关闭该窗口即可停止服务。
+- BAT 闪退时，从项目目录的 `cmd` 窗口运行 `test-homedb.bat`，可保留错误输出。
+
+## 手动启动
+
+需要 Node.js LTS 和 pnpm。若已安装 Node.js 但没有 pnpm，可先启用 Corepack。
+
+```powershell
+corepack enable
+pnpm install --frozen-lockfile
+pnpm dev --port 3000
 ```
 
-打开 [http://localhost:3000](http://localhost:3000) 即可访问。
+打开 [http://localhost:3000](http://localhost:3000)。不要使用 `pnpm dev -- --port 3000`，Next.js 会把额外的 `--` 误认为项目目录。
 
-**注意**：本地开发时如果没有配置 `BLOB_READ_WRITE_TOKEN`，数据将仅保存在 localStorage，不会同步到云端。
+## 环境变量与存储
 
-## JSON 导入格式（最简）
+| 变量 | 作用 | 未配置时 |
+| --- | --- | --- |
+| `NAV_PASSWORD` | 页面登录密码，同时保护 `/api/data` 读写 | 不要求登录 |
+| `BLOB_READ_WRITE_TOKEN` | 读写 Vercel Blob 中的 `nav-data.json` | 仅使用当前浏览器的 localStorage |
+
+本地需要环境变量时，在项目根目录创建不会提交的 `.env.local`：
+
+```dotenv
+NAV_PASSWORD=自己的访问密码
+BLOB_READ_WRITE_TOKEN=自己的_Vercel_Blob_令牌
+```
+
+Vercel 上的变量在 Project Settings > Environment Variables 管理。修改后需要重新部署才会生效。
+
+**注意：** 本地填入真实 `BLOB_READ_WRITE_TOKEN` 后，本地编辑会同步到线上同一份 Blob 数据。只测试界面时应留空该变量。
+
+### 存储边界
+
+| 数据 | localStorage | Vercel Blob | JSON 导出 |
+| --- | --- | --- | --- |
+| 分组、书签、顺序、折叠、重点、备注、点击次数 | 是 | 配置 Blob 时是 | 是 |
+| 主题、页面标题、自定义背景 | 是 | 否 | 否 |
+| 左侧栏折叠状态、登录令牌 | 是 | 否 | 否 |
+
+因此，更换浏览器或设备时，书签可从 Blob 同步，但主题、标题和背景需要在新设备上重新设置。
+
+## 导入与导出
+
+导入文件不能超过 1 MB，顶层必须是包含 `groups` 数组的 JSON 对象。最简格式：
 
 ```json
 {
   "groups": [
     {
-      "name": "分组名称",
+      "name": "VPS",
       "bookmarks": [
-        { "name": "站点名", "url": "https://example.com" },
-        { "name": "带图标", "url": "https://example.com", "icon": "https://icon-url.png" },
-        { "name": "内置图标", "url": "http://10.0.0.1", "icon": "builtin:server" },
-        { "name": "带备注", "url": "https://example.com", "note": "需要 VPN 访问" }
+        {
+          "name": "VPS 01",
+          "url": "https://example.com",
+          "note": "只能从公司网络访问"
+        }
       ]
     }
   ]
 }
 ```
 
-- `id`、`order`、`color` 等字段可省略，导入时自动生成
-- `icon` 字段可选，留空则自动获取网站 favicon；填 `builtin:xxx` 使用内置图标（server / database / cloud / terminal / harddrive / shield / monitor）
-- `note` 字段可选，为书签添加备注说明
-- IP 地址、内网主机等无法抓取图标的站点会自动使用首字母配色头像
+- `id`、`order`、`color` 可省略，导入时会自动生成。
+- `url` 必须是完整的 `http://` 或 `https://` 地址。
+- `icon` 字段可省略，也可使用完整图片 URL 或 `builtin:server` 等内置图标。
+- “覆盖”会清空现有数据；“与现有合并”会保留现有分组，并按 ID 合并。覆盖前必须先导出备份。
+- 导出文件只包含分组和书签数据，不包含密码、Blob 令牌、主题或背景。
 
-## 环境变量说明
+### 导入错误含义
 
-| 变量名 | 说明 | 必填 |
-|--------|------|------|
-| `BLOB_READ_WRITE_TOKEN` | Vercel Blob 存储令牌（创建 Blob Store 后自动注入） | 否（无则仅本地存储） |
-| `NAV_PASSWORD` | 访问密码（留空则不需要密码） | 否 |
+- `JSON 文件解析失败，请检查格式。`：文件不是合法 JSON，常见原因是多余逗号、引号不匹配、注释或字符编码问题。
+- `JSON 数据内容不兼容，请检查分组、书签和网址字段。`：JSON 语法正确，但不符合数据结构，优先检查顶层 `groups`、分组名、书签名和完整 HTTP/HTTPS URL。
+
+## 私密数据规则
+
+- `reference/` 只用于放本地导出、旧数据和测试样本，已在 `.gitignore` 中忽略，**永远不提交**。
+- `.env.local` 中可能有密码和 Blob 令牌，也永远不提交。
+- 提交前运行 `git status --short`，确认没有导出 JSON、截图、令牌或其他个人数据。
+- 可用 `git check-ignore reference/ -v` 确认私密目录仍被忽略。
+
+## 维护与发布
+
+1. 修改数据逻辑前，先从线上页面导出备份到 `reference/`。
+2. 完成代码修改后，双击 `test-homedb.bat` 并选择 `2` 跑完整门禁。
+3. 检查变更，只暂存本次要发布的文件。
+
+```powershell
+git status --short
+git diff --check
+git add <本次变更的文件>
+git commit -m "feat: 说明本次修改"
+git fetch origin main
+git status --short --branch
+git push origin main
+```
+
+4. GitHub `main` 更新后，Vercel 会自动创建部署。
+5. 在 Vercel Deployments 中等待状态变为 Ready，再检查线上页面的搜索、分组导航、书签打开和同步状态。
+6. 若部署失败，先查看 Vercel Build Logs，不要在未定位原因时覆盖线上数据。
+
+## 验证命令
+
+```powershell
+pnpm test -- --reporter=dot
+pnpm typecheck
+pnpm lint
+pnpm build
+git diff --check
+```
+
+其中 `pnpm build` 是最接近 Vercel 构建环境的本地检查，推送前不应省略。
 
 ## 技术栈
 
-- [Next.js](https://nextjs.org) - React 框架
-- [React](https://react.dev) - UI 库
-- [TypeScript](https://typescriptlang.org) - 类型安全
-- [Tailwind CSS](https://tailwindcss.com) - 原子化 CSS
-- [shadcn/ui](https://ui.shadcn.com) - UI 组件
-- [@dnd-kit](https://dndkit.com) - 拖拽排序
-- [Vercel Blob](https://vercel.com/storage/blob) - 云端存储
+- Next.js 16 + React 19 + TypeScript
+- Tailwind CSS 4
+- dnd-kit 拖拽排序
+- Zod 数据校验
+- Vercel Blob 多设备数据存储
+- Vitest + Testing Library
 
-## 更新日志
+## 维护注意事项
 
-### v0.4
-
-**安全加固**
-- 新增 `lib/server-auth.ts` 共享鉴权模块，`/api/data` 读写接口在设置密码时强制校验 Bearer token（修复未授权即可覆盖云端数据的漏洞）
-- 修复 `timingSafeEqual` 收到畸形 token 时抛异常导致 500 的问题（增加长度保护与异常捕获）
-- 登录密码改用时序安全比较，POST 数据增加格式校验
-- 清理接口中残留的调试日志
-
-**新功能**
-- 智能图标：自动抓取网站 favicon（多服务回退），IP / 内网地址自动使用首字母配色头像
-- 内置图标库：精选 7 个 VPS / 服务器场景图标，编辑书签时可一键选择
-- 书签备注：为书签添加备注说明，卡片上直接显示
-- 点击统计与最常访问：记录点击次数，高频书签自动进入常用栏
-- 分组折叠：点击标题折叠/展开，状态随云端同步
-- 背景自定义：预设纯色 + 自定义壁纸图片，自动叠加半透明层保证可读性
-- 添加书签时根据 URL 自动建议名称
-
-**修复**
-- 修复 `bookmark-card.tsx` 中 `role` / `tabIndex` 被拖拽属性覆盖的无障碍问题
-- 页脚同步状态在失败时正确显示"同步失败"而非"已同步"
-
-## 相关链接
-
-- [v0 项目](https://v0.app/chat/projects/prj_v0fbhZpp9ZHG4f6UAGaaNkxHzWjj) - 继续在 v0 上开发
-- [Next.js 文档](https://nextjs.org/docs) - 了解 Next.js
-- [v0 文档](https://v0.app/docs) - 了解 v0
-
-<a href="https://v0.app/chat/api/kiro/clone/gaodui409/homedb" alt="Open in Kiro"><img src="https://pdgvvgmkdvyeydso.public.blob.vercel-storage.com/open%20in%20kiro.svg?sanitize=true" /></a>
+- 不要让火苗、点击次数或重点标记参与分组和书签排序。
+- 修改导入结构时保留对旧导出文件的兼容，并先增加失败测试。
+- 修改同步逻辑时，同时检查 localStorage 回退、未同步标记和 Blob 首次初始化。
+- 移动端只做辅助使用，但每次发布仍要检查 390px 宽度下菜单栏、抽屉和备注浮层不重叠。

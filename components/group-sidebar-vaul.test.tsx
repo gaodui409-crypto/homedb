@@ -349,6 +349,9 @@ describe('MobileGroupDrawer with real Vaul primitives', () => {
     })
 
     expect(onOpenChange).toHaveBeenCalledWith(false)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    })
   })
 
   it('removes real drawer content and overlay after an overlay close', async () => {

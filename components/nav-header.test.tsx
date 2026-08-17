@@ -35,11 +35,14 @@ const halfControlledConfigsAreInvalid: HalfControlledConfigsAreInvalid = [
 ]
 
 interface NavigationOverrides {
+  adminMode?: boolean
+  theme?: HeaderProps['theme']
   navigationOpen?: boolean
   onNavigationOpenChange?: (open: boolean) => void
   navigationTriggerRef?: RefObject<HTMLButtonElement | null>
   searchQuery?: string
   onSearchChange?: (query: string) => void
+  onThemeChange?: (theme: 'light' | 'sepia' | 'dark') => void
 }
 
 function renderHeader(overrides: NavigationOverrides = {}) {
@@ -52,11 +55,11 @@ function renderHeader(overrides: NavigationOverrides = {}) {
   const result = render(
     <NavHeader
       title="HomeDB"
-      theme="light"
-      adminMode={false}
+      theme={overrides.theme ?? 'light'}
+      adminMode={overrides.adminMode ?? false}
       searchQuery={overrides.searchQuery ?? ''}
       onSearchChange={onSearchChange}
-      onThemeChange={vi.fn()}
+      onThemeChange={overrides.onThemeChange ?? vi.fn()}
       onTitleChange={vi.fn()}
       onAdminToggle={vi.fn()}
       onAddGroup={vi.fn()}
@@ -190,6 +193,51 @@ describe('NavHeader branding', () => {
     expect(
       icon.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
+  })
+
+  it('keeps the title and its edit command out of the compact mobile row', () => {
+    renderHeader({ adminMode: true })
+
+    expect(screen.getByRole('heading', { name: 'HomeDB' }).className).toContain('sr-only')
+    const editTitle = screen.getByRole('button', { name: '编辑标题' })
+    expect(editTitle.className).toContain('hidden')
+    expect(editTitle.className).toContain('sm:flex')
+  })
+})
+
+describe('NavHeader theme controls', () => {
+  it('keeps the segmented picker for desktop and uses one compact mobile control', async () => {
+    const user = userEvent.setup()
+    const onThemeChange = vi.fn()
+    renderHeader({ onThemeChange })
+
+    expect(screen.getByTestId('desktop-theme-switcher').className).toContain('hidden')
+    expect(screen.getByTestId('desktop-theme-switcher').className).toContain('sm:flex')
+
+    const mobileThemeButton = screen.getByRole('button', {
+      name: '切换主题，当前日间模式',
+    })
+    expect(mobileThemeButton.className).toContain('sm:hidden')
+
+    await user.click(mobileThemeButton)
+
+    expect(onThemeChange).toHaveBeenCalledWith('sepia')
+  })
+
+  it('falls back to the light theme when persisted input is invalid', async () => {
+    const user = userEvent.setup()
+    const onThemeChange = vi.fn()
+    renderHeader({
+      theme: 'corrupted' as HeaderProps['theme'],
+      onThemeChange,
+    })
+
+    expect(screen.getByRole('button', { name: '日间模式' }).getAttribute('aria-pressed')).toBe('true')
+    await user.click(screen.getByRole('button', {
+      name: '切换主题，当前日间模式',
+    }))
+
+    expect(onThemeChange).toHaveBeenCalledWith('sepia')
   })
 })
 
