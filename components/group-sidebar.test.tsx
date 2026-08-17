@@ -147,7 +147,7 @@ describe('GroupSidebarContent', () => {
     expect(trigger.tagName).toBe('BUTTON')
     expect(trigger.getAttribute('aria-disabled')).toBe('true')
     expect((trigger as HTMLButtonElement).tabIndex).toBe(0)
-    expect(trigger.hasAttribute('title')).toBe(false)
+    expect(trigger.getAttribute('title')).toBe(disabledLabel)
     expect(screen.getAllByRole('button', { name: disabledLabel })).toHaveLength(1)
     expect((trigger as HTMLButtonElement).disabled).toBe(false)
     expect(trigger.querySelector('button')).toBeNull()
@@ -156,7 +156,6 @@ describe('GroupSidebarContent', () => {
     await user.tab()
 
     expect(document.activeElement).toBe(trigger)
-    expect((await screen.findByRole('tooltip')).textContent).toBe(disabledLabel)
 
     await user.click(trigger)
 

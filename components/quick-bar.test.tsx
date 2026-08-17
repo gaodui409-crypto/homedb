@@ -30,9 +30,11 @@ describe('QuickBar', () => {
     const { container } = render(
       <QuickBar
         pinnedBookmarks={[]}
+        frequentBookmarks={[]}
         adminMode={false}
         searchQuery="query"
         onSearchChange={onSearchChange}
+        onOpenBookmark={vi.fn()}
       />
     )
 
@@ -51,9 +53,11 @@ describe('QuickBar', () => {
     render(
       <QuickBar
         pinnedBookmarks={[{ bookmark: pinnedBookmark, groupId: 'legacy-group' }]}
+        frequentBookmarks={[]}
         adminMode={false}
         searchQuery="   "
         onSearchChange={vi.fn()}
+        onOpenBookmark={vi.fn()}
       />
     )
 

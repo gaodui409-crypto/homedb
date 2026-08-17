@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createToken, isAuthorizationValid } from '@/lib/auth-token'
+import { createToken, isAuthorizationValid, safeCompare } from '@/lib/auth-token'
 
 // POST: Login with password
 export async function POST(request: NextRequest) {
@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const inputPassword = body.password
 
-    if (inputPassword === password) {
+    if (typeof inputPassword === 'string' && safeCompare(inputPassword, password)) {
       const token = createToken(password)
       return NextResponse.json({ token })
     } else {

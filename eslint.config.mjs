@@ -1,14 +1,15 @@
 import { defineConfig, globalIgnores } from 'eslint/config'
 import nextVitals from 'eslint-config-next/core-web-vitals'
-import nextTypeScript from 'eslint-config-next/typescript'
+import nextTypescript from 'eslint-config-next/typescript'
 
 export default defineConfig([
   ...nextVitals,
-  ...nextTypeScript,
+  ...nextTypescript,
   {
+    files: ['components/favicon-image.tsx'],
     rules: {
       '@next/next/no-img-element': 'off',
     },
   },
-  globalIgnores(['.next/**', 'node_modules/**', 'components/ui/**', 'hooks/use-toast.ts']),
+  globalIgnores(['.next/**', 'node_modules/**']),
 ])

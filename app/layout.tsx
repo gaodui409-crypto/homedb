@@ -20,7 +20,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="zh-CN">
+    <html lang="zh-CN" className="bg-background">
       <body className={`${inter.variable} font-sans antialiased`}>
         {children}
         <Analytics />

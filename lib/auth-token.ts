@@ -3,6 +3,12 @@ import crypto from 'node:crypto'
 const TOKEN_EXPIRY_MS = 30 * 24 * 60 * 60 * 1_000
 const HMAC_HEX_LENGTH = 64
 
+export function safeCompare(left: string, right: string): boolean {
+  const leftHash = crypto.createHash('sha256').update(left).digest()
+  const rightHash = crypto.createHash('sha256').update(right).digest()
+  return crypto.timingSafeEqual(leftHash, rightHash)
+}
+
 export function createToken(secret: string, now = Date.now()): string {
   const timestamp = now.toString()
   const hmac = crypto.createHmac('sha256', secret).update(timestamp).digest('hex')

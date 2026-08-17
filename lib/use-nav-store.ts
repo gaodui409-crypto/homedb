@@ -6,9 +6,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 
 import { v4 as uuid } from 'uuid'
 
-import type { Group, Bookmark, Theme, NavData } from './types'
+import type { Group, Bookmark, Theme, NavData, BackgroundSetting } from './types'
 import { DEFAULT_DATA } from './default-data'
-import { parseStoredNavData } from './nav-data'
+import { importNavDataSchema, navDataSchema, type ImportNavData } from './nav-schema'
 import {
   decideInitialSync,
   hasPendingSync,
@@ -20,12 +20,28 @@ const STORAGE_KEY = 'mininav_data'
 const THEME_KEY = 'mininav_theme'
 const TITLE_KEY = 'mininav_title'
 const TOKEN_KEY = 'mininav_token'
+const BG_KEY = 'mininav_bg'
+
+function loadBackground(): BackgroundSetting {
+  try {
+    const raw = localStorage.getItem(BG_KEY)
+    if (!raw) return { type: 'none' }
+    const parsed = JSON.parse(raw) as BackgroundSetting
+    if (parsed.type === 'color' || parsed.type === 'image' || parsed.type === 'none') {
+      return parsed
+    }
+    return { type: 'none' }
+  } catch {
+    return { type: 'none' }
+  }
+}
 
 function loadGroups(): Group[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return DEFAULT_DATA
-    return parseStoredNavData(JSON.parse(raw)).groups
+    const parsed = navDataSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data.groups : DEFAULT_DATA
   } catch {
     return DEFAULT_DATA
   }
@@ -61,6 +77,7 @@ export function useNavStore() {
   const [groups, setGroupsState] = useState<Group[]>(() => loadGroups())
   const [theme, setThemeState] = useState<Theme>(() => loadTheme())
   const [title, setTitleState] = useState<string>(() => loadTitle())
+  const [background, setBackgroundState] = useState<BackgroundSetting>(() => loadBackground())
   const [adminMode, setAdminMode] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -112,14 +129,12 @@ export function useNavStore() {
   useEffect(() => {
     async function loadFromCloud() {
       try {
-        console.log('[v0] Loading from cloud...')
         const token = getToken()
         const res = await fetch('/api/data', {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         })
         if (!res.ok) {
-          setSyncError('云端数据加载失败')
-          return
+          throw new Error('Cloud data request failed')
         }
 
         const source = res.headers.get('X-Nav-Data-Source') as CloudDataSource | null
@@ -128,7 +143,11 @@ export function useNavStore() {
           return
         }
 
-        const cloudData = parseStoredNavData(await res.json())
+        const parsed = navDataSchema.safeParse(await res.json())
+        if (!parsed.success) {
+          throw new Error('Invalid cloud data')
+        }
+
         const localData = loadGroups()
         const action = decideInitialSync({
           source,
@@ -138,18 +157,21 @@ export function useNavStore() {
         if (action === 'upload-local') {
           syncToCloud(localData, 0)
         } else if (action === 'use-cloud') {
-          setGroupsState(cloudData.groups)
-          saveGroupsLocal(cloudData.groups)
+          setGroupsState(parsed.data.groups)
+          saveGroupsLocal(parsed.data.groups)
         } else {
           setPendingSync(localStorage, false)
         }
-      } catch (err) {
-        console.log('[v0] Load from cloud failed:', err)
-        setSyncError('云端数据加载失败')
+      } catch {
+        setSyncError('云端数据读取失败，当前使用本地数据')
       }
     }
     loadFromCloud()
   }, [syncToCloud])
+
+  useEffect(() => () => {
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current)
+  }, [])
 
   const setGroups = useCallback(
     (g: Group[] | ((prev: Group[]) => Group[])) => {
@@ -171,6 +193,11 @@ export function useNavStore() {
   const setTitle = useCallback((t: string) => {
     setTitleState(t)
     localStorage.setItem(TITLE_KEY, t)
+  }, [])
+
+  const setBackground = useCallback((bg: BackgroundSetting) => {
+    setBackgroundState(bg)
+    localStorage.setItem(BG_KEY, JSON.stringify(bg))
   }, [])
 
   useEffect(() => {
@@ -213,7 +240,7 @@ export function useNavStore() {
   )
 
   const addBookmark = useCallback(
-    (groupId: string, name: string, url: string, icon?: string) => {
+    (groupId: string, name: string, url: string, icon?: string, note?: string) => {
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g
@@ -223,6 +250,7 @@ export function useNavStore() {
             url,
             order: g.bookmarks.length,
             icon: icon || undefined,
+            note: note?.trim() || undefined,
           }
           return { ...g, bookmarks: [...g.bookmarks, bm] }
         })
@@ -238,8 +266,10 @@ export function useNavStore() {
       name: string,
       url: string,
       icon?: string,
-      newGroupId?: string
+      newGroupId?: string,
+      note?: string
     ) => {
+      const noteVal = note?.trim() || undefined
       setGroups((prev) => {
         if (!newGroupId || newGroupId === groupId) {
           return prev.map((g) => {
@@ -247,7 +277,9 @@ export function useNavStore() {
             return {
               ...g,
               bookmarks: g.bookmarks.map((b) =>
-                b.id === bookmarkId ? { ...b, name, url, icon: icon || undefined } : b
+                b.id === bookmarkId
+                  ? { ...b, name, url, icon: icon || undefined, note: noteVal }
+                  : b
               ),
             }
           })
@@ -256,7 +288,7 @@ export function useNavStore() {
         const updated = prev.map((g) => {
           if (g.id === groupId) {
             const bm = g.bookmarks.find((b) => b.id === bookmarkId)
-            if (bm) movedBm = { ...bm, name, url, icon: icon || undefined }
+            if (bm) movedBm = { ...bm, name, url, icon: icon || undefined, note: noteVal }
             return { ...g, bookmarks: g.bookmarks.filter((b) => b.id !== bookmarkId) }
           }
           return g
@@ -319,6 +351,29 @@ export function useNavStore() {
     [setGroups]
   )
 
+  const recordClick = useCallback(
+    (bookmarkId: string) => {
+      setGroups((prev) =>
+        prev.map((g) => ({
+          ...g,
+          bookmarks: g.bookmarks.map((b) =>
+            b.id === bookmarkId ? { ...b, clicks: (b.clicks ?? 0) + 1 } : b
+          ),
+        }))
+      )
+    },
+    [setGroups]
+  )
+
+  const toggleGroupCollapsed = useCallback(
+    (groupId: string) => {
+      setGroups((prev) =>
+        prev.map((g) => (g.id === groupId ? { ...g, collapsed: !g.collapsed } : g))
+      )
+    },
+    [setGroups]
+  )
+
   const togglePinBookmark = useCallback(
     (groupId: string, bookmarkId: string) => {
       setGroups((prev) =>
@@ -347,9 +402,48 @@ export function useNavStore() {
     URL.revokeObjectURL(url)
   }, [groups])
 
+  const normalizeImportData = useCallback((data: ImportNavData): Group[] => {
+    const defaultColors = [
+      '#3B82F6',
+      '#10B981',
+      '#F59E0B',
+      '#EF4444',
+      '#8B5CF6',
+      '#EC4899',
+      '#06B6D4',
+      '#84CC16',
+    ]
+
+    return data.groups.map((g, gIndex) => {
+      const groupId = g.id || uuid()
+      const groupColor = g.color || defaultColors[gIndex % defaultColors.length]
+
+      const normalizedBookmarks: Bookmark[] = (g.bookmarks ?? []).map((b, bIndex) => ({
+        id: b.id || uuid(),
+        name: b.name,
+        url: b.url,
+        order: typeof b.order === 'number' ? b.order : bIndex,
+        pinned: b.pinned ?? false,
+        icon: b.icon || undefined,
+        note: b.note || undefined,
+        clicks: typeof b.clicks === 'number' ? b.clicks : undefined,
+      }))
+
+      return {
+        id: groupId,
+        name: g.name,
+        order: typeof g.order === 'number' ? g.order : gIndex,
+        color: groupColor,
+        bookmarks: normalizedBookmarks,
+        collapsed: g.collapsed ?? false,
+      }
+    })
+  }, [])
+
   const importData = useCallback(
-    (data: NavData, mode: 'overwrite' | 'merge') => {
-      const normalizedGroups = data.groups
+    (data: ImportNavData, mode: 'overwrite' | 'merge') => {
+      const parsed = importNavDataSchema.parse(data)
+      const normalizedGroups = normalizeImportData(parsed)
 
       if (mode === 'overwrite') {
         setGroups(normalizedGroups)
@@ -377,13 +471,14 @@ export function useNavStore() {
         })
       }
     },
-    [setGroups]
+    [normalizeImportData, setGroups]
   )
 
   return {
     groups,
     theme,
     title,
+    background,
     adminMode,
     syncing,
     syncError,
@@ -391,7 +486,10 @@ export function useNavStore() {
     retrySyncToCloud: () => syncToCloud(groups, 0),
     setTheme,
     setTitle,
+    setBackground,
     setAdminMode,
+    recordClick,
+    toggleGroupCollapsed,
     addGroup,
     updateGroup,
     deleteGroup,

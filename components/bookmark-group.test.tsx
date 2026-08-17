@@ -77,6 +77,8 @@ describe('SortableGroup', () => {
         onTogglePin={vi.fn()}
         onEditGroup={vi.fn()}
         onDeleteGroup={vi.fn()}
+        onToggleCollapse={vi.fn()}
+        onOpenBookmark={vi.fn()}
       />
     )
 
@@ -100,6 +102,8 @@ describe('SortableGroup', () => {
         onTogglePin={vi.fn()}
         onEditGroup={vi.fn()}
         onDeleteGroup={vi.fn()}
+        onToggleCollapse={vi.fn()}
+        onOpenBookmark={vi.fn()}
       />
     )
 
@@ -134,6 +138,8 @@ describe('SortableGroup', () => {
         onTogglePin={vi.fn()}
         onEditGroup={vi.fn()}
         onDeleteGroup={vi.fn()}
+        onToggleCollapse={vi.fn()}
+        onOpenBookmark={vi.fn()}
       />
     )
 

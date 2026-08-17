@@ -38,8 +38,10 @@ import {
   GroupModal,
   ImportModeModal,
   ConfirmDeleteModal,
+  BackgroundModal,
 } from '@/components/admin-modals'
-import type { Bookmark, Group, NavData } from '@/lib/types'
+import type { Bookmark, Group } from '@/lib/types'
+import type { ImportNavData } from '@/lib/nav-schema'
 
 type ModalState =
   | { type: 'none' }
@@ -49,7 +51,8 @@ type ModalState =
   | { type: 'editGroup'; group: Group }
   | { type: 'deleteBookmark'; groupId: string; bookmarkId: string; name: string }
   | { type: 'deleteGroup'; groupId: string; name: string }
-  | { type: 'importMode'; data: NavData; fileName: string }
+  | { type: 'importMode'; data: ImportNavData; fileName: string }
+  | { type: 'background' }
 
 type ActiveDrag =
   | { type: 'bookmark'; bookmark: Bookmark; fromGroupId: string }
@@ -116,6 +119,17 @@ export function NavApp() {
       }
     }
     return result
+  }, [sortedGroups])
+
+  // Most-visited: top clicked bookmarks (>= 3 clicks, not already pinned), max 6
+  const frequentBookmarks = useMemo(() => {
+    const all: Bookmark[] = []
+    for (const g of sortedGroups) {
+      for (const b of g.bookmarks) {
+        if (!b.pinned && (b.clicks ?? 0) >= 3) all.push(b)
+      }
+    }
+    return all.sort((a, b) => (b.clicks ?? 0) - (a.clicks ?? 0)).slice(0, 6)
   }, [sortedGroups])
 
   const sensors = useSensors(
@@ -240,13 +254,34 @@ export function NavApp() {
     }
   }
 
+  const bg = store.background
+
   return (
     <div
-      className="min-h-screen bg-background"
+      className="min-h-screen bg-background relative"
       style={{
         '--sticky-navigation-offset': `${stickyAnchorTop + 16}px`,
       } as CSSProperties}
     >
+      {/* Custom background layer + readability overlay */}
+      {bg.type !== 'none' && (
+        <>
+          <div
+            className="fixed inset-0 z-0 bg-cover bg-center bg-no-repeat"
+            style={
+              bg.type === 'image'
+                ? { backgroundImage: `url(${bg.value})` }
+                : { backgroundColor: bg.value }
+            }
+            aria-hidden="true"
+          />
+          <div
+            className={`fixed inset-0 z-0 ${bg.type === 'image' ? 'bg-background/70' : 'bg-background/40'}`}
+            aria-hidden="true"
+          />
+        </>
+      )}
+      <div className="relative z-10">
       <NavHeader
         title={store.title}
         theme={store.theme}
@@ -261,6 +296,7 @@ export function NavApp() {
           setModal({ type: 'importMode', data, fileName })
         }
         onLogout={handleLogout}
+        onOpenBackground={() => setModal({ type: 'background' })}
         navigationOpen={navigationOpen}
         onNavigationOpenChange={setNavigationOpen}
         navigationTriggerRef={navigationTriggerRef}
@@ -285,9 +321,11 @@ export function NavApp() {
         <div className="min-w-0 flex-1">
           <QuickBar
             pinnedBookmarks={pinnedBookmarks}
+            frequentBookmarks={frequentBookmarks}
             adminMode={store.adminMode}
             searchQuery={searchQuery}
             onSearchChange={setSearchQuery}
+            onOpenBookmark={store.recordClick}
           />
 
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -356,6 +394,8 @@ export function NavApp() {
                     onDeleteGroup={(gId) =>
                       setModal({ type: 'deleteGroup', groupId: gId, name: group.name })
                     }
+                    onToggleCollapse={store.toggleGroupCollapsed}
+                    onOpenBookmark={store.recordClick}
                   />
                 ))}
 
@@ -405,7 +445,7 @@ export function NavApp() {
 
           <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center">
             <p className="text-xs text-muted-foreground">
-              MiniNav v0.3 · 数据{store.syncing ? '同步中' : '已同步'} · <a href="https://github.com/gaodui409/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
+              MiniNav v0.4 · 数据{store.syncing ? '同步中' : store.syncError ? '同步失败' : '已同步'} · <a href="https://github.com/gaodui409-crypto/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
             </p>
           </footer>
         </div>
@@ -420,7 +460,7 @@ export function NavApp() {
               : { groupId: modal.groupId }
           }
           groups={store.groups}
-          onSave={(sourceGroupId, name, url, icon, newGroupId) => {
+          onSave={(sourceGroupId, name, url, icon, newGroupId, note) => {
             if (modal.type === 'editBookmark') {
               store.updateBookmark(
                 sourceGroupId,
@@ -428,10 +468,11 @@ export function NavApp() {
                 name,
                 url,
                 icon,
-                newGroupId !== sourceGroupId ? newGroupId : undefined
+                newGroupId !== sourceGroupId ? newGroupId : undefined,
+                note
               )
             } else {
-              store.addBookmark(newGroupId, name, url, icon)
+              store.addBookmark(newGroupId, name, url, icon, note)
             }
           }}
           onClose={() => setModal({ type: 'none' })}
@@ -476,12 +517,21 @@ export function NavApp() {
         />
       )}
 
+      {modal.type === 'background' && (
+        <BackgroundModal
+          current={store.background}
+          onSave={store.setBackground}
+          onClose={() => setModal({ type: 'none' })}
+        />
+      )}
+
       {/* Sync Error Toast */}
       <SyncErrorToast
         error={store.syncError}
         onRetry={store.retrySyncToCloud}
         onDismiss={store.clearSyncError}
       />
+      </div>
     </div>
   )
 }

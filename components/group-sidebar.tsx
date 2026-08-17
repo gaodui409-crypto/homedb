@@ -16,11 +16,6 @@ import {
 } from '@/lib/sidebar-navigation'
 import { cn } from '@/lib/utils'
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
-import {
   Drawer,
   DrawerClose,
   DrawerContent,
@@ -142,6 +137,7 @@ export function GroupSidebarContent({
           <button
             type="button"
             aria-label={label}
+            title={collapsed ? label : undefined}
             aria-disabled={unavailableInCollapsed ? true : undefined}
             aria-current={active ? 'location' : undefined}
             disabled={item.disabled && !unavailableInCollapsed}
@@ -179,18 +175,7 @@ export function GroupSidebarContent({
           </button>
         )
 
-        return (
-          <li key={item.id}>
-            {collapsed ? (
-              <Tooltip>
-                <TooltipTrigger asChild>{button}</TooltipTrigger>
-                <TooltipContent side="right" sideOffset={8}>
-                  {label}
-                </TooltipContent>
-              </Tooltip>
-            ) : button}
-          </li>
-        )
+        return <li key={item.id}>{button}</li>
       })}
     </ul>
   )
@@ -241,30 +226,24 @@ export function DesktopGroupSidebar(props: DesktopGroupSidebarProps) {
       </nav>
 
       <div className="flex shrink-0 border-t p-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              aria-label={toggleLabel}
-              aria-expanded={!collapsed}
-              onClick={handleToggle}
-              className={cn(
-                'flex size-9 items-center justify-center rounded-[8px] text-muted-foreground outline-none',
-                'hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
-                collapsed ? 'mx-auto' : 'ml-auto'
-              )}
-            >
-              {collapsed ? (
-                <PanelLeftOpen aria-hidden="true" className="size-4" />
-              ) : (
-                <PanelLeftClose aria-hidden="true" className="size-4" />
-              )}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right" sideOffset={8}>
-            {toggleLabel}
-          </TooltipContent>
-        </Tooltip>
+        <button
+          type="button"
+          aria-label={toggleLabel}
+          title={toggleLabel}
+          aria-expanded={!collapsed}
+          onClick={handleToggle}
+          className={cn(
+            'flex size-9 items-center justify-center rounded-[8px] text-muted-foreground outline-none',
+            'hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring',
+            collapsed ? 'mx-auto' : 'ml-auto'
+          )}
+        >
+          {collapsed ? (
+            <PanelLeftOpen aria-hidden="true" className="size-4" />
+          ) : (
+            <PanelLeftClose aria-hidden="true" className="size-4" />
+          )}
+        </button>
       </div>
     </aside>
   )

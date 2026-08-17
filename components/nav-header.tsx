@@ -3,10 +3,10 @@
 import { useRef, useState, type RefObject } from 'react'
 import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
-  Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, Menu,
+  Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, Menu, Paintbrush,
 } from 'lucide-react'
-import type { Theme, NavData } from '@/lib/types'
-import { normalizeImportData } from '@/lib/nav-data'
+import type { Theme } from '@/lib/types'
+import { importNavDataSchema, type ImportNavData } from '@/lib/nav-schema'
 
 interface NavHeaderBaseProps {
   title: string
@@ -18,8 +18,9 @@ interface NavHeaderBaseProps {
   onAdminToggle: () => void
   onAddGroup: () => void
   onExport: () => void
-  onImportFile: (data: NavData, fileName: string) => void
+  onImportFile: (data: ImportNavData, fileName: string) => void
   onLogout?: () => void
+  onOpenBackground: () => void
 }
 
 type NavHeaderNavigationProps =
@@ -57,6 +58,7 @@ export function NavHeader({
   onExport,
   onImportFile,
   onLogout,
+  onOpenBackground,
 }: NavHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(title)
@@ -73,6 +75,11 @@ export function NavHeader({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (file.size > 1024 * 1024) {
+      alert('JSON 文件不能超过 1 MB。')
+      e.target.value = ''
+      return
+    }
     const reader = new FileReader()
     reader.onload = (ev) => {
       let input: unknown
@@ -84,7 +91,7 @@ export function NavHeader({
       }
 
       try {
-        const data: NavData = normalizeImportData(input)
+        const data = importNavDataSchema.parse(input)
         onImportFile(data, file.name)
       } catch {
         alert('JSON 数据内容不兼容，请检查分组、书签和网址字段。')
@@ -249,6 +256,16 @@ export function NavHeader({
                 />
               </>
             )}
+
+            {/* Background settings */}
+            <button
+              onClick={onOpenBackground}
+              className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              title="背景自定义"
+              aria-label="背景自定义"
+            >
+              <Paintbrush size={15} />
+            </button>
 
             {/* Theme switcher */}
             <div className="flex items-center rounded-lg border border-border overflow-hidden">

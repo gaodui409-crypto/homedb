@@ -32,7 +32,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
             return
           }
         } catch {
-          // API error, require auth
+          setError('暂时无法验证身份，请重试')
         }
         setStatus('unauthenticated')
         return
@@ -51,7 +51,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
           setStatus('unauthenticated')
         }
       } catch {
-        clearToken()
+        setError('暂时无法验证身份，请重试')
         setStatus('unauthenticated')
       }
     }

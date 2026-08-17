@@ -1,8 +1,8 @@
 import { NextRequest } from 'next/server'
 import { get, put } from '@vercel/blob'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-
 import { createToken } from '@/lib/auth-token'
+import { DEFAULT_DATA } from '@/lib/default-data'
 
 vi.mock('@vercel/blob', () => ({
   get: vi.fn(),
@@ -12,37 +12,25 @@ vi.mock('@vercel/blob', () => ({
 import { GET, POST } from './route'
 
 describe('/api/data authorization', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    vi.spyOn(console, 'log').mockImplementation(() => {})
-  })
+  beforeEach(() => vi.clearAllMocks())
 
   afterEach(() => {
     delete process.env.NAV_PASSWORD
     delete process.env.BLOB_READ_WRITE_TOKEN
   })
 
-  it('rejects an unauthenticated read when a password is configured', async () => {
+  it('rejects unauthenticated reads and writes when a password is configured', async () => {
     process.env.NAV_PASSWORD = 'review-secret'
-    const request = new NextRequest('http://localhost/api/data')
-    const get = GET as unknown as (request: NextRequest) => Promise<Response>
 
-    const response = await get(request)
-
-    expect(response.status).toBe(401)
-  })
-
-  it('rejects an unauthenticated write when a password is configured', async () => {
-    process.env.NAV_PASSWORD = 'review-secret'
-    const request = new NextRequest('http://localhost/api/data', {
+    const readResponse = await GET(new NextRequest('http://localhost/api/data'))
+    const writeResponse = await POST(new NextRequest('http://localhost/api/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ groups: [] }),
-    })
+    }))
 
-    const response = await POST(request)
-
-    expect(response.status).toBe(401)
+    expect(readResponse.status).toBe(401)
+    expect(writeResponse.status).toBe(401)
   })
 })
 
@@ -51,7 +39,6 @@ describe('/api/data cloud behavior', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.spyOn(console, 'log').mockImplementation(() => {})
     process.env.NAV_PASSWORD = password
     process.env.BLOB_READ_WRITE_TOKEN = 'blob-token'
   })
@@ -72,22 +59,26 @@ describe('/api/data cloud behavior', () => {
     })
   }
 
-  it('returns 503 when Blob cannot be read', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.mocked(get).mockRejectedValueOnce(new Error('temporary outage'))
-
-    const response = await GET(authorizedRequest())
-
-    expect(response.status).toBe(503)
-  })
-
-  it('marks a missing blob separately from stored data', async () => {
+  it('marks a missing blob as uninitialized', async () => {
     vi.mocked(get).mockResolvedValueOnce(null)
 
     const response = await GET(authorizedRequest())
 
     expect(response.status).toBe(200)
     expect(response.headers.get('X-Nav-Data-Source')).toBe('missing')
+    await expect(response.json()).resolves.toMatchObject({
+      initialized: false,
+      storage: 'blob',
+    })
+  })
+
+  it('returns 503 instead of default data when Blob cannot be read', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(get).mockRejectedValueOnce(new Error('temporary outage'))
+
+    const response = await GET(authorizedRequest())
+
+    expect(response.status).toBe(503)
   })
 
   it('keeps an intentionally empty stored dataset authoritative', async () => {
@@ -101,15 +92,25 @@ describe('/api/data cloud behavior', () => {
 
     const response = await GET(authorizedRequest())
 
-    expect(response.status).toBe(200)
     expect(response.headers.get('X-Nav-Data-Source')).toBe('stored')
-    await expect(response.json()).resolves.toEqual({ groups: [] })
+    await expect(response.json()).resolves.toMatchObject({ groups: [], initialized: true })
   })
 
-  it('rejects malformed writes before calling Blob', async () => {
-    const response = await POST(authorizedRequest('POST', { groups: [{ name: 'invalid' }] }))
+  it('rejects invalid data before writing', async () => {
+    const response = await POST(authorizedRequest('POST', {
+      groups: [{ name: 'missing fields' }],
+    }))
 
     expect(response.status).toBe(400)
     expect(put).not.toHaveBeenCalled()
+  })
+
+  it('writes valid navigation data', async () => {
+    vi.mocked(put).mockResolvedValueOnce({ url: 'https://example.blob/nav-data.json' } as never)
+
+    const response = await POST(authorizedRequest('POST', { groups: DEFAULT_DATA }))
+
+    expect(response.status).toBe(200)
+    expect(put).toHaveBeenCalledOnce()
   })
 })

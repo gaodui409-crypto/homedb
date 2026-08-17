@@ -57,6 +57,7 @@ function renderHeader(overrides: NavigationOverrides = {}) {
       onAddGroup={vi.fn()}
       onExport={vi.fn()}
       onImportFile={vi.fn()}
+      onOpenBackground={vi.fn()}
       navigationOpen={navigationOpen}
       onNavigationOpenChange={onNavigationOpenChange}
       navigationTriggerRef={navigationTriggerRef}
@@ -78,6 +79,7 @@ function renderImportHeader(onImportFile = vi.fn()) {
       onAddGroup={vi.fn()}
       onExport={vi.fn()}
       onImportFile={onImportFile}
+      onOpenBackground={vi.fn()}
     />
   )
   const input = result.container.querySelector<HTMLInputElement>('input[type="file"]')
@@ -128,6 +130,7 @@ describe('NavHeader mobile navigation trigger', () => {
         onAddGroup={vi.fn()}
         onExport={vi.fn()}
         onImportFile={vi.fn()}
+        onOpenBackground={vi.fn()}
       />
     )
 
@@ -150,6 +153,7 @@ describe('NavHeader mobile navigation trigger', () => {
         onAddGroup={vi.fn()}
         onExport={vi.fn()}
         onImportFile={vi.fn()}
+        onOpenBackground={vi.fn()}
       />
     )
 
@@ -181,7 +185,7 @@ describe('NavHeader data import', () => {
     expect(onImportFile).toHaveBeenCalledWith(
       expect.objectContaining({
         groups: [expect.objectContaining({
-          bookmarks: [expect.objectContaining({ icon: undefined })],
+          bookmarks: [expect.objectContaining({ icon: 'builtin:server' })],
         })],
       }),
       'old-export.json'

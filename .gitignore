@@ -14,5 +14,9 @@ next.user-config.*
 # Common ignores
 node_modules/
 .next/
+next-env.d.ts
 *.tsbuildinfo
 .DS_Store
+
+# Local navigation exports and private test data
+reference/

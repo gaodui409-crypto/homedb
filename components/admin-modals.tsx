@@ -1,9 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { X, ExternalLink } from 'lucide-react'
-import type { Bookmark, Group } from '@/lib/types'
-import { normalizeHttpUrl } from '@/lib/nav-data'
+import { X, ExternalLink, ImageIcon, Paintbrush } from 'lucide-react'
+import { suggestNameFromUrl } from '@/lib/favicon'
+import { normalizeHttpUrl } from '@/lib/nav-schema'
+import { FaviconImage } from '@/components/favicon-image'
+import { BUILTIN_ICONS, BUILTIN_ICON_PREFIX, isBuiltinIcon } from '@/components/builtin-icons'
+import type { Bookmark, Group, BackgroundSetting } from '@/lib/types'
 
 // ── Shared overlay backdrop ──────────────────────────────────────────────
 function Backdrop({ onClick }: { onClick: () => void }) {
@@ -80,17 +83,8 @@ export interface BookmarkModalState {
 interface BookmarkModalProps {
   state: BookmarkModalState
   groups: Group[]
-  onSave: (groupId: string, name: string, url: string, icon: string, newGroupId: string) => void
+  onSave: (groupId: string, name: string, url: string, icon: string, newGroupId: string, note: string) => void
   onClose: () => void
-}
-
-function getFaviconUrl(url: string) {
-  try {
-    const domain = new URL(url).hostname
-    return `https://favicon.im/${domain}`
-  } catch {
-    return ''
-  }
 }
 
 export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalProps) {
@@ -98,24 +92,39 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
   const [name, setName] = useState(state.bookmark?.name ?? '')
   const [url, setUrl] = useState(state.bookmark?.url ?? '')
   const [icon, setIcon] = useState(state.bookmark?.icon ?? '')
+  const [note, setNote] = useState(state.bookmark?.note ?? '')
   const [selectedGroupId, setSelectedGroupId] = useState(state.groupId)
-  const [faviconError, setFaviconError] = useState(false)
-  const [urlError, setUrlError] = useState('')
-  // Use custom icon if set, otherwise auto-detect favicon
-  const previewIconUrl = icon.trim() || getFaviconUrl(url)
+  const [formError, setFormError] = useState('')
+  const previewUrl = normalizeHttpUrl(url)
+
+  // Auto-suggest name from URL when name is still empty
+  const handleUrlBlur = () => {
+    if (!name.trim() && url.trim()) {
+      const suggested = suggestNameFromUrl(url)
+      if (suggested) setName(suggested)
+    }
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || !url.trim()) return
-    try {
-      const finalUrl = normalizeHttpUrl(url)
-      const finalIcon = icon.trim() ? normalizeHttpUrl(icon) : ''
-      setUrlError('')
-      onSave(state.groupId, name.trim(), finalUrl, finalIcon, selectedGroupId)
-    } catch {
-      setUrlError('网址和图标地址只支持 HTTP 或 HTTPS')
+
+    const finalUrl = normalizeHttpUrl(url)
+    if (!finalUrl) {
+      setFormError('请输入有效的网址')
       return
     }
+
+    const iconValue = icon.trim()
+    const finalIcon = !iconValue || isBuiltinIcon(iconValue)
+      ? iconValue
+      : normalizeHttpUrl(iconValue)
+    if (finalIcon === null) {
+      setFormError('自定义图标必须是有效的网址')
+      return
+    }
+
+    onSave(state.groupId, name.trim(), finalUrl, finalIcon, selectedGroupId, note)
     onClose()
   }
 
@@ -123,28 +132,21 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
     <ModalShell title={isEdit ? '编辑书签' : '添加书签'} onClose={onClose}>
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         {/* Icon Preview */}
-        {url && (
+        {previewUrl && (
           <div className="flex items-center gap-3 p-3 rounded-xl bg-accent border border-border">
-            <div className="size-8 rounded-lg overflow-hidden flex items-center justify-center bg-primary/10 flex-shrink-0">
-              {!faviconError && previewIconUrl ? (
-                <img
-                  src={previewIconUrl}
-                  alt="网站图标"
-                  width={32}
-                  height={32}
-                  className="size-full object-contain"
-                  onError={() => setFaviconError(true)}
-                />
-              ) : (
-                <span className="text-primary text-xs font-bold">{name.charAt(0) || '?'}</span>
-              )}
-            </div>
+            <FaviconImage
+              key={`${url}|${icon}`}
+              url={previewUrl}
+              name={name || '?'}
+              customIcon={icon.trim() || undefined}
+              className="size-8 rounded-lg"
+            />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{name || '网站名称'}</p>
               <p className="text-xs text-muted-foreground truncate">{url}</p>
             </div>
             <a
-              href={url.startsWith('http') ? url : `https://${url}`}
+              href={previewUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="text-muted-foreground hover:text-foreground transition-colors"
@@ -162,6 +164,7 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="例：GitHub"
+            maxLength={100}
             required
             autoFocus
           />
@@ -172,22 +175,64 @@ export function BookmarkModal({ state, groups, onSave, onClose }: BookmarkModalP
             className={inputCls}
             type="text"
             value={url}
-            onChange={(e) => { setUrl(e.target.value); setFaviconError(false) }}
+            onChange={(e) => {
+              setUrl(e.target.value)
+              setFormError('')
+            }}
+            onBlur={handleUrlBlur}
             placeholder="https://..."
+            maxLength={2048}
             required
           />
         </FormField>
 
-        {urlError && <p className="text-xs text-destructive">{urlError}</p>}
+        {formError && <p className="text-sm text-destructive">{formError}</p>}
 
-        <FormField label="自定义图标 URL（可选）">
-          <input
-            className={inputCls}
-            type="text"
-            value={icon}
-            onChange={(e) => { setIcon(e.target.value); setFaviconError(false) }}
-            placeholder="留空则自动获取网站图标"
+        <FormField label="备注（可选）">
+          <textarea
+            className={`${inputCls} resize-none`}
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="例：公司内网需 VPN / 账号是工作邮箱"
+            maxLength={100}
           />
+        </FormField>
+
+        <FormField label="图标（可选）">
+          <div className="flex flex-col gap-2">
+            <div className="grid grid-cols-7 gap-1.5">
+              {BUILTIN_ICONS.map(({ id, label, Icon }) => {
+                const value = `${BUILTIN_ICON_PREFIX}${id}`
+                const selected = icon === value
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setIcon(selected ? '' : value)}
+                    className={`aspect-square flex items-center justify-center rounded-lg border transition-colors ${
+                      selected
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
+                    }`}
+                    title={label}
+                    aria-label={`内置图标 ${label}`}
+                    aria-pressed={selected}
+                  >
+                    <Icon size={15} />
+                  </button>
+                )
+              })}
+            </div>
+            <input
+              className={inputCls}
+              type="text"
+              value={isBuiltinIcon(icon) ? '' : icon}
+              onChange={(e) => setIcon(e.target.value)}
+              placeholder="或粘贴自定义图标 URL；都留空则自动获取 / 首字母配色"
+              maxLength={2048}
+            />
+          </div>
         </FormField>
 
         <FormField label="所属分组">
@@ -263,6 +308,7 @@ export function GroupModal({ state, onSave, onClose }: GroupModalProps) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="例：AI 工具"
+            maxLength={100}
             required
             autoFocus
           />
@@ -354,6 +400,89 @@ interface ConfirmDeleteProps {
   message: string
   onConfirm: () => void
   onClose: () => void
+}
+
+// ── Background Settings Modal ────────────────────────────────────────────
+interface BackgroundModalProps {
+  current: BackgroundSetting
+  onSave: (bg: BackgroundSetting) => void
+  onClose: () => void
+}
+
+const BG_COLOR_PRESETS = [
+  { label: '雾蓝', value: '#EEF3F8' },
+  { label: '暖米', value: '#F6F1E7' },
+  { label: '薄荷', value: '#EDF5F0' },
+  { label: '浅灰', value: '#F0F0F2' },
+  { label: '墨蓝', value: '#12181F' },
+  { label: '碳黑', value: '#161616' },
+]
+
+export function BackgroundModal({ current, onSave, onClose }: BackgroundModalProps) {
+  const [imageUrl, setImageUrl] = useState(current.type === 'image' ? current.value : '')
+
+  return (
+    <ModalShell title="背景自定义" onClose={onClose}>
+      <div className="flex flex-col gap-4">
+        <FormField label="纯色背景">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => { onSave({ type: 'none' }); onClose() }}
+              className={`h-9 px-3 rounded-lg border text-xs font-medium transition-colors ${
+                current.type === 'none'
+                  ? 'border-primary text-primary bg-primary/10'
+                  : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
+              }`}
+            >
+              默认
+            </button>
+            {BG_COLOR_PRESETS.map((c) => (
+              <button
+                key={c.value}
+                type="button"
+                onClick={() => { onSave({ type: 'color', value: c.value }); onClose() }}
+                className={`size-9 rounded-lg border-2 transition-transform hover:scale-110 ${
+                  current.type === 'color' && current.value === c.value
+                    ? 'border-primary'
+                    : 'border-border'
+                }`}
+                style={{ backgroundColor: c.value }}
+                aria-label={`背景色 ${c.label}`}
+                title={c.label}
+              />
+            ))}
+          </div>
+        </FormField>
+
+        <FormField label="壁纸图片 URL">
+          <div className="flex gap-2">
+            <input
+              className={inputCls}
+              type="text"
+              value={imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+              placeholder="https://... 图片地址"
+            />
+            <button
+              type="button"
+              disabled={!imageUrl.trim()}
+              onClick={() => { onSave({ type: 'image', value: imageUrl.trim() }); onClose() }}
+              className="flex items-center gap-1.5 px-3 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex-shrink-0"
+            >
+              <ImageIcon size={13} />
+              应用
+            </button>
+          </div>
+        </FormField>
+
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <Paintbrush size={12} className="flex-shrink-0" />
+          背景设置保存在本设备浏览器中，不随云端同步
+        </p>
+      </div>
+    </ModalShell>
+  )
 }
 
 export function ConfirmDeleteModal({ message, onConfirm, onClose }: ConfirmDeleteProps) {
