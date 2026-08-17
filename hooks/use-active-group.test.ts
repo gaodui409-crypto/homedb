@@ -6,7 +6,7 @@ import {
   resolveStickyAnchorTop,
 } from './use-active-group'
 
-const ROOT_MARGIN = '-112px 0px -724px 0px'
+const ROOT_MARGIN = '-56px 0px -780px 0px'
 
 function createElement(id: string, getTop: () => number = () => 0): Element {
   return {
@@ -52,27 +52,27 @@ function createObserverHarness() {
 
 describe('getActiveGroupRootMargin', () => {
   it('builds a 64px activation band below the sticky header', () => {
-    expect(getActiveGroupRootMargin(900)).toBe('-112px 0px -724px 0px')
-    expect(getActiveGroupRootMargin(844)).toBe('-112px 0px -668px 0px')
+    expect(getActiveGroupRootMargin(900)).toBe('-56px 0px -780px 0px')
+    expect(getActiveGroupRootMargin(844)).toBe('-56px 0px -724px 0px')
   })
 
   it('clamps the bottom inset for a very short viewport', () => {
-    expect(getActiveGroupRootMargin(160)).toBe('-112px 0px -0px 0px')
+    expect(getActiveGroupRootMargin(100)).toBe('-56px 0px -0px 0px')
   })
 
-  it('accounts for an expanded sticky quick-access row', () => {
-    expect(getActiveGroupRootMargin(900, 176)).toBe('-176px 0px -660px 0px')
+  it('honors an explicitly measured header anchor', () => {
+    expect(getActiveGroupRootMargin(900, 72)).toBe('-72px 0px -764px 0px')
   })
 })
 
 describe('resolveStickyAnchorTop', () => {
-  it('keeps the legacy minimum while honoring taller sticky content', () => {
-    expect(resolveStickyAnchorTop([56, 104])).toBe(112)
-    expect(resolveStickyAnchorTop([56, 144])).toBe(144)
+  it('keeps one header row as the minimum while honoring its measurement', () => {
+    expect(resolveStickyAnchorTop([40])).toBe(56)
+    expect(resolveStickyAnchorTop([56, 72])).toBe(72)
   })
 
   it('ignores invalid measurements and falls back to the minimum', () => {
-    expect(resolveStickyAnchorTop([Number.NaN, 0])).toBe(112)
+    expect(resolveStickyAnchorTop([Number.NaN, 0])).toBe(56)
   })
 })
 

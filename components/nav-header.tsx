@@ -1,9 +1,10 @@
 'use client'
 
-import { useRef, useState, type RefObject } from 'react'
+import { useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
   Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, Menu, Paintbrush,
+  Search, ArrowLeft,
 } from 'lucide-react'
 import type { Theme } from '@/lib/types'
 import { importNavDataSchema, type ImportNavData } from '@/lib/nav-schema'
@@ -13,6 +14,8 @@ interface NavHeaderBaseProps {
   theme: Theme
   adminMode: boolean
   syncing?: boolean
+  searchQuery: string
+  onSearchChange: (query: string) => void
   onThemeChange: (t: Theme) => void
   onTitleChange: (t: string) => void
   onAdminToggle: () => void
@@ -43,15 +46,66 @@ const THEMES: { key: Theme; icon: React.ReactNode; label: string }[] = [
   { key: 'dark', icon: <Moon size={15} />, label: '深夜模式' },
 ]
 
+interface SearchFieldProps {
+  query: string
+  label: string
+  autoFocus?: boolean
+  onChange: (query: string) => void
+  onEscape?: () => void
+}
+
+function SearchField({
+  query,
+  label,
+  autoFocus,
+  onChange,
+  onEscape,
+}: SearchFieldProps) {
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    onChange('')
+    onEscape?.()
+  }
+
+  return (
+    <div className="flex h-8 min-w-0 flex-1 items-center rounded-[8px] border border-border bg-background focus-within:ring-2 focus-within:ring-primary/30">
+      <Search aria-hidden="true" className="ml-2.5 size-3.5 shrink-0 text-muted-foreground" />
+      <input
+        type="search"
+        aria-label={label}
+        autoFocus={autoFocus}
+        placeholder="搜索书签..."
+        value={query}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={handleKeyDown}
+        className="h-full min-w-0 flex-1 bg-transparent px-2 text-xs text-foreground outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
+      />
+      {query && (
+        <button
+          type="button"
+          aria-label="清除搜索"
+          onClick={() => onChange('')}
+          className="mr-1.5 flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X aria-hidden="true" className="size-3" />
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function NavHeader({
   title,
   theme,
   adminMode,
   syncing,
+  searchQuery,
   navigationOpen,
   onNavigationOpenChange,
   navigationTriggerRef,
   onThemeChange,
+  onSearchChange,
   onTitleChange,
   onAdminToggle,
   onAddGroup,
@@ -63,6 +117,7 @@ export function NavHeader({
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(title)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const commitTitle = () => {
@@ -109,6 +164,26 @@ export function NavHeader({
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-3 h-14">
+          {mobileSearchOpen ? (
+            <div data-mobile-search="true" className="flex min-w-0 flex-1 items-center gap-2 md:hidden">
+              <button
+                type="button"
+                aria-label="关闭搜索"
+                onClick={() => setMobileSearchOpen(false)}
+                className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <ArrowLeft aria-hidden="true" className="size-4" />
+              </button>
+              <SearchField
+                query={searchQuery}
+                label="手机搜索书签"
+                autoFocus
+                onChange={onSearchChange}
+                onEscape={() => setMobileSearchOpen(false)}
+              />
+            </div>
+          ) : (
+            <>
           {onNavigationOpenChange && navigationTriggerRef && (
             <button
               ref={navigationTriggerRef}
@@ -170,6 +245,23 @@ export function NavHeader({
               </div>
             )}
           </div>
+
+          <div className="hidden w-40 shrink-0 md:flex lg:w-48 xl:w-64">
+            <SearchField
+              query={searchQuery}
+              label="搜索书签"
+              onChange={onSearchChange}
+            />
+          </div>
+
+          <button
+            type="button"
+            aria-label="打开搜索"
+            onClick={() => setMobileSearchOpen(true)}
+            className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+          >
+            <Search aria-hidden="true" className="size-4" />
+          </button>
 
           {/* Right actions */}
           <div className="flex items-center gap-1.5">
@@ -324,6 +416,8 @@ export function NavHeader({
               </button>
             )}
           </div>
+            </>
+          )}
         </div>
       </div>
     </header>

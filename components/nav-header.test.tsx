@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { createRef, type RefObject } from 'react'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -38,6 +38,8 @@ interface NavigationOverrides {
   navigationOpen?: boolean
   onNavigationOpenChange?: (open: boolean) => void
   navigationTriggerRef?: RefObject<HTMLButtonElement | null>
+  searchQuery?: string
+  onSearchChange?: (query: string) => void
 }
 
 function renderHeader(overrides: NavigationOverrides = {}) {
@@ -46,11 +48,14 @@ function renderHeader(overrides: NavigationOverrides = {}) {
     overrides.onNavigationOpenChange ?? vi.fn()
   const navigationTriggerRef =
     overrides.navigationTriggerRef ?? createRef<HTMLButtonElement>()
+  const onSearchChange = overrides.onSearchChange ?? vi.fn()
   const result = render(
     <NavHeader
       title="HomeDB"
       theme="light"
       adminMode={false}
+      searchQuery={overrides.searchQuery ?? ''}
+      onSearchChange={onSearchChange}
       onThemeChange={vi.fn()}
       onTitleChange={vi.fn()}
       onAdminToggle={vi.fn()}
@@ -64,7 +69,12 @@ function renderHeader(overrides: NavigationOverrides = {}) {
     />
   )
 
-  return { ...result, navigationTriggerRef, onNavigationOpenChange }
+  return {
+    ...result,
+    navigationTriggerRef,
+    onNavigationOpenChange,
+    onSearchChange,
+  }
 }
 
 function renderImportHeader(onImportFile = vi.fn()) {
@@ -73,6 +83,8 @@ function renderImportHeader(onImportFile = vi.fn()) {
       title="HomeDB"
       theme="light"
       adminMode
+      searchQuery=""
+      onSearchChange={vi.fn()}
       onThemeChange={vi.fn()}
       onTitleChange={vi.fn()}
       onAdminToggle={vi.fn()}
@@ -121,6 +133,8 @@ describe('NavHeader mobile navigation trigger', () => {
         title="HomeDB"
         theme="light"
         adminMode={false}
+        searchQuery=""
+        onSearchChange={vi.fn()}
         navigationOpen
         onNavigationOpenChange={onNavigationOpenChange}
         navigationTriggerRef={navigationTriggerRef}
@@ -147,6 +161,8 @@ describe('NavHeader mobile navigation trigger', () => {
         title="HomeDB"
         theme="light"
         adminMode={false}
+        searchQuery=""
+        onSearchChange={vi.fn()}
         onThemeChange={vi.fn()}
         onTitleChange={vi.fn()}
         onAdminToggle={vi.fn()}
@@ -159,6 +175,44 @@ describe('NavHeader mobile navigation trigger', () => {
 
     expect(
       screen.queryByRole('button', { name: '打开分组导航' })
+    ).toBeNull()
+  })
+})
+
+describe('NavHeader search', () => {
+  it('keeps desktop search controlled and exposes a clear command', async () => {
+    const user = userEvent.setup()
+    const onSearchChange = vi.fn()
+    renderHeader({ searchQuery: 'vps', onSearchChange })
+
+    const search = screen.getByRole('searchbox', { name: '搜索书签' })
+    expect(search.getAttribute('value')).toBe('vps')
+
+    fireEvent.change(search, { target: { value: 'nas' } })
+    expect(onSearchChange).toHaveBeenCalledWith('nas')
+
+    await user.click(screen.getByRole('button', { name: '清除搜索' }))
+    expect(onSearchChange).toHaveBeenLastCalledWith('')
+  })
+
+  it('opens mobile search without adding another navigation row and closes on Escape', async () => {
+    const user = userEvent.setup()
+    const onSearchChange = vi.fn()
+    const { container } = renderHeader({ searchQuery: 'vps', onSearchChange })
+
+    await user.click(screen.getByRole('button', { name: '打开搜索' }))
+
+    const mobileSearch = screen.getByRole('searchbox', {
+      name: '手机搜索书签',
+    })
+    expect(mobileSearch.closest('[data-mobile-search]')).toBeTruthy()
+    expect(container.querySelector('[data-search-row]')).toBeNull()
+
+    await user.keyboard('{Escape}')
+
+    expect(onSearchChange).toHaveBeenLastCalledWith('')
+    expect(
+      screen.queryByRole('searchbox', { name: '手机搜索书签' })
     ).toBeNull()
   })
 })

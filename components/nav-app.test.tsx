@@ -9,7 +9,6 @@ import { NavApp } from './nav-app'
 import type { SortableGroup } from './bookmark-group'
 import type { DesktopGroupSidebar, MobileGroupDrawer } from './group-sidebar'
 import type { NavHeader } from './nav-header'
-import type { QuickBar } from './quick-bar'
 import type { Group } from '@/lib/types'
 
 const appMocks = vi.hoisted(() => ({
@@ -18,7 +17,6 @@ const appMocks = vi.hoisted(() => ({
   dndContextProps: [] as unknown[],
   headerProps: [] as unknown[],
   mobileProps: [] as unknown[],
-  quickBarProps: [] as unknown[],
   setActiveGroupId: vi.fn(),
   stickyAnchorTop: 144,
   sortableContextProps: [] as unknown[],
@@ -52,32 +50,28 @@ vi.mock('@/components/nav-header', () => ({
   NavHeader: (props: Record<string, unknown>) => {
     appMocks.headerProps.push(props)
     return (
-      <button
-        ref={props.navigationTriggerRef as Ref<HTMLButtonElement>}
-        type="button"
-        data-testid="header-navigation-trigger"
-        data-open={String(props.navigationOpen)}
-        onClick={() =>
-          (props.onNavigationOpenChange as (open: boolean) => void)?.(true)
-        }
-      >
-        Open navigation
-      </button>
-    )
-  },
-}))
-
-vi.mock('@/components/quick-bar', () => ({
-  QuickBar: (props: Record<string, unknown>) => {
-    appMocks.quickBarProps.push(props)
-    return (
-      <input
-        aria-label="测试搜索"
-        value={props.searchQuery as string}
-        onChange={(event) =>
-          (props.onSearchChange as (query: string) => void)(event.target.value)
-        }
-      />
+      <header data-nav-header="true">
+        <button
+          ref={props.navigationTriggerRef as Ref<HTMLButtonElement>}
+          type="button"
+          data-testid="header-navigation-trigger"
+          data-open={String(props.navigationOpen)}
+          onClick={() =>
+            (props.onNavigationOpenChange as (open: boolean) => void)?.(true)
+          }
+        >
+          Open navigation
+        </button>
+        <input
+          aria-label="测试搜索"
+          value={(props.searchQuery as string) ?? ''}
+          onChange={(event) =>
+            (props.onSearchChange as ((query: string) => void) | undefined)?.(
+              event.target.value
+            )
+          }
+        />
+      </header>
     )
   },
 }))
@@ -176,7 +170,6 @@ vi.mock('@dnd-kit/sortable', () => ({
 }))
 
 type HeaderProps = ComponentProps<typeof NavHeader>
-type QuickBarProps = ComponentProps<typeof QuickBar>
 type DesktopProps = ComponentProps<typeof DesktopGroupSidebar>
 type MobileProps = ComponentProps<typeof MobileGroupDrawer>
 type SortableGroupProps = ComponentProps<typeof SortableGroup>
@@ -260,7 +253,6 @@ function resetCapturedProps() {
   appMocks.dndContextProps.length = 0
   appMocks.headerProps.length = 0
   appMocks.mobileProps.length = 0
-  appMocks.quickBarProps.length = 0
   appMocks.sortableContextProps.length = 0
   appMocks.sortableGroupProps.length = 0
   appMocks.useActiveGroupIds.length = 0
@@ -297,7 +289,13 @@ describe('NavApp sidebar integration', () => {
     expect(latest<MobileProps>(appMocks.mobileProps).items).toEqual(
       latest<DesktopProps>(appMocks.desktopProps).items
     )
-    expect(latest<QuickBarProps>(appMocks.quickBarProps)).not.toHaveProperty('groups')
+    expect(latest<HeaderProps>(appMocks.headerProps)).toEqual(
+      expect.objectContaining({
+        searchQuery: '',
+        onSearchChange: expect.any(Function),
+      })
+    )
+    expect(document.querySelector('[data-sticky-navigation]')).toBeNull()
     expect(appMocks.useActiveGroupIds.at(-1)).toEqual(['first', 'later'])
 
     expect(latest<Record<string, unknown>>(appMocks.dndContextProps)).toEqual(

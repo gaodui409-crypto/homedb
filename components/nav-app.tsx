@@ -23,7 +23,6 @@ import { AlertTriangle, X, RefreshCw } from 'lucide-react'
 import { NavHeader } from '@/components/nav-header'
 import { SortableGroup } from '@/components/bookmark-group'
 import { BookmarkCard } from '@/components/bookmark-card'
-import { QuickBar } from '@/components/quick-bar'
 import {
   DesktopGroupSidebar,
   MobileGroupDrawer,
@@ -110,27 +109,6 @@ export function NavApp() {
     stickyAnchorTop,
   } = useActiveGroup(visibleGroupIds)
   const dragEnabled = store.adminMode && normalizedSearchQuery.length === 0
-
-  const pinnedBookmarks = useMemo(() => {
-    const result: { bookmark: Bookmark; groupId: string }[] = []
-    for (const g of sortedGroups) {
-      for (const b of g.bookmarks) {
-        if (b.pinned) result.push({ bookmark: b, groupId: g.id })
-      }
-    }
-    return result
-  }, [sortedGroups])
-
-  // Most-visited: top clicked bookmarks (>= 3 clicks, not already pinned), max 6
-  const frequentBookmarks = useMemo(() => {
-    const all: Bookmark[] = []
-    for (const g of sortedGroups) {
-      for (const b of g.bookmarks) {
-        if (!b.pinned && (b.clicks ?? 0) >= 3) all.push(b)
-      }
-    }
-    return all.sort((a, b) => (b.clicks ?? 0) - (a.clicks ?? 0)).slice(0, 6)
-  }, [sortedGroups])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -287,6 +265,8 @@ export function NavApp() {
         theme={store.theme}
         adminMode={store.adminMode}
         syncing={store.syncing}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
         onThemeChange={store.setTheme}
         onTitleChange={store.setTitle}
         onAdminToggle={() => store.setAdminMode(!store.adminMode)}
@@ -319,20 +299,11 @@ export function NavApp() {
         />
 
         <div className="min-w-0 flex-1">
-          <QuickBar
-            pinnedBookmarks={pinnedBookmarks}
-            frequentBookmarks={frequentBookmarks}
-            adminMode={store.adminMode}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
-            onOpenBookmark={store.recordClick}
-          />
-
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {store.adminMode && (
           <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary/10 border border-primary/20 text-primary text-sm font-medium">
             <span className="size-2 rounded-full bg-primary inline-block" />
-            管理模式 — 点击卡片编辑，拖拽排序，点击图钉置顶到常用栏
+            管理模式 — 点击卡片打开，使用铅笔编辑，拖拽排序，点击图钉标记重点
           </div>
         )}
 

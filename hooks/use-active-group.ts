@@ -7,13 +7,10 @@ import {
   selectClosestVisibleGroup,
 } from '@/lib/sidebar-navigation'
 
-const STICKY_HEADER_TOP = 112
+const STICKY_HEADER_TOP = 56
 const ACTIVE_GROUP_BAND_HEIGHT = 64
 const GROUP_ELEMENT_PREFIX = 'group-'
-const STICKY_LAYOUT_SELECTORS = [
-  '[data-nav-header]',
-  '[data-sticky-navigation]',
-]
+const STICKY_LAYOUT_SELECTORS = ['[data-nav-header]']
 
 interface ActiveGroupObserverDependencies {
   getElementById: (id: string) => Element | null
