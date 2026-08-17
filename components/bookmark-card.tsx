@@ -2,8 +2,9 @@
 
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Pencil, Trash2, Pin, PinOff, StickyNote } from 'lucide-react'
+import { Flame, Pencil, Trash2, Pin, PinOff } from 'lucide-react'
 import { FaviconImage } from './favicon-image'
+import { BookmarkNote } from './bookmark-note'
 import { getDomain } from '@/lib/favicon'
 import type { Bookmark } from '@/lib/types'
 
@@ -83,22 +84,36 @@ export function BookmarkCard({
 
       {/* Text */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1 min-w-0">
-          <p className="text-sm font-medium text-card-foreground truncate leading-tight">
+        <div className="flex min-w-0 items-center gap-1">
+          <p className="min-w-0 flex-1 truncate text-sm font-medium leading-tight text-card-foreground">
             {bookmark.name}
           </p>
-          {bookmark.note && (
-            <span
-              className="flex-shrink-0 text-amber-500"
-              title={bookmark.note}
-              aria-label={`备注：${bookmark.note}`}
-            >
-              <StickyNote size={11} />
-            </span>
-          )}
+          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+            {(bookmark.clicks ?? 0) >= 3 && (
+              <span
+                role="img"
+                aria-label={`常用，已打开 ${bookmark.clicks} 次`}
+                title={`常用，已打开 ${bookmark.clicks} 次`}
+                className="flex size-5 items-center justify-center text-orange-500"
+              >
+                <Flame aria-hidden="true" className="size-3" />
+              </span>
+            )}
+            {bookmark.pinned && (
+              <span
+                role="img"
+                aria-label="重点书签"
+                title="重点书签"
+                className="flex size-5 items-center justify-center text-primary"
+              >
+                <Pin aria-hidden="true" className="size-3" />
+              </span>
+            )}
+            {bookmark.note && <BookmarkNote note={bookmark.note} />}
+          </span>
         </div>
         <p className="text-xs text-muted-foreground truncate mt-0.5">
-          {bookmark.note || getDomain(bookmark.url)}
+          {getDomain(bookmark.url)}
         </p>
       </div>
 
@@ -113,8 +128,8 @@ export function BookmarkCard({
             <button
               onClick={(e) => { e.stopPropagation(); onTogglePin(bookmark.id) }}
               className="size-6 flex items-center justify-center rounded-md text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 transition-colors"
-              aria-label={bookmark.pinned ? '取消置顶' : '置顶到常用'}
-              title={bookmark.pinned ? '取消置顶' : '置顶到常用'}
+              aria-label={bookmark.pinned ? '取消重点' : '标记重点'}
+              title={bookmark.pinned ? '取消重点' : '标记重点'}
             >
               {bookmark.pinned ? <PinOff size={12} /> : <Pin size={12} />}
             </button>
