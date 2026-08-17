@@ -1,5 +1,6 @@
 'use client'
 
+import Image from 'next/image'
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
@@ -199,6 +200,13 @@ export function NavHeader({
 
           {/* Title */}
           <div className="flex-1 flex items-center gap-2 min-w-0">
+            <Image
+              src="/mininav-icon.png"
+              alt="MiniNav"
+              width={22}
+              height={22}
+              className="size-[22px] shrink-0"
+            />
             {editingTitle ? (
               <div className="flex items-center gap-1.5 flex-1 min-w-0 max-w-xs">
                 <input

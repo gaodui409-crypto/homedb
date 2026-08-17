@@ -9,9 +9,13 @@ const inter = Inter({
 })
 
 export const metadata: Metadata = {
-  title: '我的导航',
+  title: 'MiniNav - 我的导航',
   description: '个人书签导航站，快速访问常用网站',
-  generator: 'v0.app',
+  applicationName: 'MiniNav',
+  icons: {
+    icon: [{ url: '/favicon-32.png', sizes: '32x32', type: 'image/png' }],
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+  },
 }
 
 export default function RootLayout({

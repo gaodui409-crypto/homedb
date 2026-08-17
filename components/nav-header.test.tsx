@@ -179,6 +179,20 @@ describe('NavHeader mobile navigation trigger', () => {
   })
 })
 
+describe('NavHeader branding', () => {
+  it('renders the MiniNav icon beside the page title', () => {
+    renderHeader()
+
+    const icon = screen.getByRole('img', { name: 'MiniNav' })
+    const heading = screen.getByRole('heading', { name: 'HomeDB' })
+
+    expect(icon.getAttribute('src')).toContain('mininav-icon.png')
+    expect(
+      icon.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+})
+
 describe('NavHeader search', () => {
   it('keeps desktop search controlled and exposes a clear command', async () => {
     const user = userEvent.setup()
