@@ -45,9 +45,13 @@ const importUrlSchema = z.string().trim().min(1).transform((value, context) => {
 })
 
 const optionalImportUrlSchema = z.preprocess(
-  (value) => value === '' || value === null ? undefined : value,
+  (value) => value === '' || value === null || isLegacyBuiltinIcon(value) ? undefined : value,
   importUrlSchema.optional()
 )
+
+function isLegacyBuiltinIcon(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('builtin:')
+}
 
 const importBookmarkSchema = z.object({
   id: z.string().min(1).optional(),
@@ -74,13 +78,18 @@ const storedUrlSchema = z.string().trim().min(1).refine(isHttpUrl, {
   message: 'URL must use HTTP or HTTPS',
 })
 
+const optionalStoredIconSchema = z.preprocess(
+  (value) => isLegacyBuiltinIcon(value) ? undefined : value,
+  storedUrlSchema.optional()
+)
+
 const storedBookmarkSchema = z.object({
   id: z.string().min(1),
   name: z.string().trim().min(1),
   url: storedUrlSchema,
   order: z.number().int().nonnegative(),
   pinned: z.boolean().optional(),
-  icon: storedUrlSchema.optional(),
+  icon: optionalStoredIconSchema,
 })
 
 const storedGroupSchema = z.object({

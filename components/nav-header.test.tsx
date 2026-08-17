@@ -66,6 +66,26 @@ function renderHeader(overrides: NavigationOverrides = {}) {
   return { ...result, navigationTriggerRef, onNavigationOpenChange }
 }
 
+function renderImportHeader(onImportFile = vi.fn()) {
+  const result = render(
+    <NavHeader
+      title="HomeDB"
+      theme="light"
+      adminMode
+      onThemeChange={vi.fn()}
+      onTitleChange={vi.fn()}
+      onAdminToggle={vi.fn()}
+      onAddGroup={vi.fn()}
+      onExport={vi.fn()}
+      onImportFile={onImportFile}
+    />
+  )
+  const input = result.container.querySelector<HTMLInputElement>('input[type="file"]')
+  if (!input) throw new Error('Import file input not found')
+
+  return { ...result, input, onImportFile }
+}
+
 afterEach(cleanup)
 
 describe('NavHeader mobile navigation trigger', () => {
@@ -136,5 +156,52 @@ describe('NavHeader mobile navigation trigger', () => {
     expect(
       screen.queryByRole('button', { name: '打开分组导航' })
     ).toBeNull()
+  })
+})
+
+describe('NavHeader data import', () => {
+  it('imports an old export containing a builtin icon marker', async () => {
+    const user = userEvent.setup()
+    const { input, onImportFile } = renderImportHeader()
+    const file = new File([
+      JSON.stringify({
+        groups: [{
+          name: 'Servers',
+          bookmarks: [{
+            name: 'Legacy server',
+            url: 'https://example.com',
+            icon: 'builtin:server',
+          }],
+        }],
+      }),
+    ], 'old-export.json', { type: 'application/json' })
+
+    await user.upload(input, file)
+
+    expect(onImportFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groups: [expect.objectContaining({
+          bookmarks: [expect.objectContaining({ icon: undefined })],
+        })],
+      }),
+      'old-export.json'
+    )
+  })
+
+  it('distinguishes incompatible data from invalid JSON syntax', async () => {
+    const user = userEvent.setup()
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {})
+    const { input } = renderImportHeader()
+
+    await user.upload(input, new File([
+      JSON.stringify({
+        groups: [{
+          name: 'Unsafe',
+          bookmarks: [{ name: 'Script', url: 'javascript:alert(1)' }],
+        }],
+      }),
+    ], 'incompatible.json', { type: 'application/json' }))
+
+    expect(alertSpy).toHaveBeenCalledWith('JSON 数据内容不兼容，请检查分组、书签和网址字段。')
   })
 })

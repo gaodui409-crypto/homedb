@@ -52,6 +52,42 @@ describe('navigation data validation', () => {
     })).toThrow()
   })
 
+  it('migrates legacy builtin icons to the favicon fallback', () => {
+    const result = normalizeImportData({
+      groups: [{
+        name: 'Servers',
+        bookmarks: [{
+          name: 'Legacy server',
+          url: 'https://example.com',
+          icon: 'builtin:server',
+        }],
+      }],
+    }, () => 'generated-id')
+
+    expect(result.groups[0].bookmarks[0].icon).toBeUndefined()
+  })
+
+  it('migrates legacy builtin icons in stored data', () => {
+    const result = parseStoredNavData({
+      groups: [{
+        id: 'group-id',
+        name: 'Servers',
+        order: 0,
+        color: '#3B82F6',
+        bookmarks: [{
+          id: 'bookmark-id',
+          name: 'Legacy server',
+          url: 'https://example.com/',
+          order: 0,
+          pinned: false,
+          icon: 'builtin:server',
+        }],
+      }],
+    })
+
+    expect(result.groups[0].bookmarks[0].icon).toBeUndefined()
+  })
+
   it('accepts an intentionally empty stored dataset', () => {
     expect(parseStoredNavData({ groups: [] })).toEqual({ groups: [] })
   })

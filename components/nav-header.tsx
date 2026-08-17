@@ -75,11 +75,19 @@ export function NavHeader({
     if (!file) return
     const reader = new FileReader()
     reader.onload = (ev) => {
+      let input: unknown
       try {
-        const data: NavData = normalizeImportData(JSON.parse(ev.target?.result as string))
-        onImportFile(data, file.name)
+        input = JSON.parse(ev.target?.result as string)
       } catch {
         alert('JSON 文件解析失败，请检查格式。')
+        return
+      }
+
+      try {
+        const data: NavData = normalizeImportData(input)
+        onImportFile(data, file.name)
+      } catch {
+        alert('JSON 数据内容不兼容，请检查分组、书签和网址字段。')
       }
     }
     reader.readAsText(file)
