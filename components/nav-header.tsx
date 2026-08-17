@@ -209,7 +209,8 @@ export function NavHeader({
               alt="MiniNav"
               width={22}
               height={22}
-              className="size-[22px] shrink-0"
+              className="shrink-0"
+              style={{ width: 22, height: 22 }}
             />
             {editingTitle ? (
               <div className="hidden flex-1 min-w-0 max-w-xs items-center gap-1.5 sm:flex">

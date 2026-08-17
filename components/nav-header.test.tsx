@@ -190,6 +190,8 @@ describe('NavHeader branding', () => {
     const heading = screen.getByRole('heading', { name: 'HomeDB' })
 
     expect(icon.getAttribute('src')).toContain('mininav-icon.png')
+    expect(icon.style.width).toBe('22px')
+    expect(icon.style.height).toBe('22px')
     expect(
       icon.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy()
