@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, ReactNode } from 'react'
+import { useState, useEffect, type ReactNode } from 'react'
 import { Lock, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { getToken, setToken, clearToken } from '@/lib/use-nav-store'
 
@@ -15,30 +15,26 @@ export function AuthGuard({ children }: AuthGuardProps) {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
-  // Check authentication on mount
   useEffect(() => {
     async function checkAuth() {
       const existingToken = getToken()
-      
-      // If no token, check if auth is required
+
       if (!existingToken) {
         try {
           const res = await fetch('/api/auth')
           const data = await res.json()
           if (data.noAuth) {
-            // No password required
             setToken('no-auth-required')
             setStatus('authenticated')
             return
           }
         } catch {
-          setError('暂时无法验证身份，请重试')
+          setError('连接失败，请重试')
         }
         setStatus('unauthenticated')
         return
       }
 
-      // Validate existing token
       try {
         const res = await fetch('/api/auth', {
           headers: { Authorization: `Bearer ${existingToken}` },
@@ -47,11 +43,11 @@ export function AuthGuard({ children }: AuthGuardProps) {
         if (data.valid) {
           setStatus('authenticated')
         } else {
-          clearToken() // Clear invalid/stale token
+          clearToken()
           setStatus('unauthenticated')
         }
       } catch {
-        setError('暂时无法验证身份，请重试')
+        setError('连接失败，请重试')
         setStatus('unauthenticated')
       }
     }
@@ -77,10 +73,10 @@ export function AuthGuard({ children }: AuthGuardProps) {
         setToken(data.token)
         setStatus('authenticated')
       } else {
-        setError(data.error || '验证失败')
+        setError(data.error || '登录失败，请重试')
       }
     } catch {
-      setError('网络错误，请重试')
+      setError('连接失败，请重试')
     } finally {
       setSubmitting(false)
     }
@@ -89,7 +85,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
   if (status === 'loading') {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <Loader2 className="size-8 text-muted-foreground animate-spin" />
+        <Loader2 className="size-8 text-muted-foreground animate-spin" aria-label="加载中" />
       </div>
     )
   }
@@ -98,22 +94,22 @@ export function AuthGuard({ children }: AuthGuardProps) {
     return <>{children}</>
   }
 
-  // Unauthenticated - show login form
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <div className="bg-card rounded-2xl shadow-lg border border-border p-8">
           <div className="flex flex-col items-center gap-4 mb-6">
             <div className="size-16 rounded-full bg-primary/10 flex items-center justify-center">
-              <Lock className="size-8 text-primary" />
+              <Lock className="size-8 text-primary" aria-hidden="true" />
             </div>
-            <h1 className="text-xl font-semibold text-foreground">请输入访问密码</h1>
+            <h1 className="text-xl font-semibold text-foreground">输入访问密码</h1>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="relative">
               <input
                 type={showPassword ? 'text' : 'password'}
+                aria-label="访问密码"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="输入密码"
@@ -123,15 +119,16 @@ export function AuthGuard({ children }: AuthGuardProps) {
               />
               <button
                 type="button"
+                aria-label={showPassword ? '隐藏密码' : '显示密码'}
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
               >
-                {showPassword ? <EyeOff className="size-5" /> : <Eye className="size-5" />}
+                {showPassword ? <EyeOff className="size-5" aria-hidden="true" /> : <Eye className="size-5" aria-hidden="true" />}
               </button>
             </div>
 
             {error && (
-              <p className="text-sm text-destructive text-center">{error}</p>
+              <p role="alert" className="text-sm text-destructive text-center">{error}</p>
             )}
 
             <button
@@ -141,8 +138,8 @@ export function AuthGuard({ children }: AuthGuardProps) {
             >
               {submitting ? (
                 <>
-                  <Loader2 className="size-4 animate-spin" />
-                  验证中...
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  验证中…
                 </>
               ) : (
                 '进入'

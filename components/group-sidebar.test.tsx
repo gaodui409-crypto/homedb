@@ -182,7 +182,7 @@ describe('GroupSidebarContent', () => {
       />
     )
 
-    expect(screen.getByText('暂无分组')).toBeTruthy()
+    expect(screen.getByText('还没有分组')).toBeTruthy()
 
     rerender(
       <GroupSidebarContent
@@ -193,7 +193,7 @@ describe('GroupSidebarContent', () => {
       />
     )
 
-    expect(screen.queryByText('暂无分组')).toBeNull()
+    expect(screen.queryByText('还没有分组')).toBeNull()
   })
 })
 

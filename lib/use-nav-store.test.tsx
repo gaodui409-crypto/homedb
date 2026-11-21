@@ -128,6 +128,20 @@ describe('useNavStore', () => {
     })
     expect(result.current.groups[0].bookmarks.map((b) => b.id)).toEqual(['b-1', 'b-2', 'b-3'])
 
+    // Surgical bookmark undo preserves concurrent additions!
+    const deletedTarget = structuredClone(result.current.groups[0].bookmarks[1]) // b-2 at index 1
+    act(() => {
+      result.current.deleteBookmark('g-vps', 'b-2')
+      result.current.addBookmark('g-vps', 'VPS 99', 'https://vps99.example.com')
+      result.current.restoreBookmark('g-vps', deletedTarget, 1)
+    })
+    expect(result.current.groups[0].bookmarks.map((b) => ({ name: b.name, order: b.order }))).toEqual([
+      { name: 'VPS 01', order: 0 },
+      { name: 'VPS 02', order: 1 },
+      { name: 'VPS 03', order: 2 },
+      { name: 'VPS 99', order: 3 },
+    ])
+
     act(() => {
       result.current.importData(
         {
@@ -211,14 +225,14 @@ describe('useNavStore', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { result } = renderHook(() => useNavStore())
-    await waitFor(() => expect(result.current.syncError).toBe('云端连接失败，暂用本机数据'))
+    await waitFor(() => expect(result.current.syncError).toBe('连不上云端，暂用本机数据'))
 
     // Dismissing toast must NOT clear persistent syncError
     act(() => {
       result.current.clearSyncError()
     })
     expect(result.current.syncNotice).toBeNull()
-    expect(result.current.syncError).toBe('云端连接失败，暂用本机数据')
+    expect(result.current.syncError).toBe('连不上云端，暂用本机数据')
 
     // User clicks a default card and clicks Retry -> must re-GET, NEVER POST DEFAULT_DATA!
     const defaultBookmarkId = result.current.groups[0]?.bookmarks[0]?.id

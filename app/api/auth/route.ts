@@ -5,7 +5,6 @@ import { createToken, isAuthorizationValid, safeCompare } from '@/lib/auth-token
 export async function POST(request: NextRequest) {
   const password = process.env.NAV_PASSWORD
 
-  // If no password is set, return a dummy token (no auth required)
   if (!password) {
     return NextResponse.json({ token: 'no-auth-required', noAuth: true })
   }
@@ -18,10 +17,10 @@ export async function POST(request: NextRequest) {
       const token = createToken(password)
       return NextResponse.json({ token })
     } else {
-      return NextResponse.json({ error: '密码错误' }, { status: 401 })
+      return NextResponse.json({ error: '密码不对' }, { status: 401 })
     }
   } catch {
-    return NextResponse.json({ error: '请求格式错误' }, { status: 400 })
+    return NextResponse.json({ error: '请求无效' }, { status: 400 })
   }
 }
 
@@ -29,7 +28,6 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   const password = process.env.NAV_PASSWORD
 
-  // If no password is set, always valid
   if (!password) {
     return NextResponse.json({ valid: true, noAuth: true })
   }

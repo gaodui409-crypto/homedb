@@ -1,6 +1,14 @@
 'use client'
 
-import { useState, useMemo, useEffect, useRef, type CSSProperties } from 'react'
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useRef,
+  useCallback,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -18,8 +26,8 @@ import {
   verticalListSortingStrategy,
   arrayMove,
 } from '@dnd-kit/sortable'
-import { useNavStore, clearToken } from '@/lib/use-nav-store'
-import { AlertTriangle, X, RefreshCw } from 'lucide-react'
+import { useNavStore, clearToken, getToken } from '@/lib/use-nav-store'
+import { AlertTriangle, X, RefreshCw, Undo2 } from 'lucide-react'
 import { NavHeader } from '@/components/nav-header'
 import { SortableGroup } from '@/components/bookmark-group'
 import { BookmarkCard } from '@/components/bookmark-card'
@@ -29,6 +37,7 @@ import {
 } from '@/components/group-sidebar'
 import { useActiveGroup } from '@/hooks/use-active-group'
 import {
+  bookmarkMatchesQuery,
   buildSidebarItems,
   normalizeSearchQuery,
 } from '@/lib/sidebar-navigation'
@@ -48,8 +57,7 @@ type ModalState =
   | { type: 'editBookmark'; groupId: string; bookmark: Bookmark }
   | { type: 'addGroup' }
   | { type: 'editGroup'; group: Group }
-  | { type: 'deleteBookmark'; groupId: string; bookmarkId: string; name: string }
-  | { type: 'deleteGroup'; groupId: string; name: string }
+  | { type: 'deleteGroup'; groupId: string; name: string; count: number }
   | { type: 'importMode'; data: ImportNavData; fileName: string }
   | { type: 'background' }
 
@@ -57,6 +65,16 @@ type ActiveDrag =
   | { type: 'bookmark'; bookmark: Bookmark; initialGroupId: string }
   | { type: 'group'; group: Group }
   | null
+
+type UndoTarget =
+  | { kind: 'bookmark'; groupId: string; bookmark: Bookmark; index: number }
+  | { kind: 'group'; group: Group; index: number }
+
+interface UndoState {
+  id: number
+  label: string
+  target: UndoTarget
+}
 
 function findGroupContainingBookmark(
   groups: Group[],
@@ -96,6 +114,28 @@ function resolveOverGroupId(
   return resolvedId
 }
 
+function scrollBookmarkCardIntoView(bookmarkId: string): void {
+  if (typeof document === 'undefined') return
+  const nodes = document.querySelectorAll<HTMLElement>('[data-bookmark-id]')
+  for (const node of nodes) {
+    if (node.dataset.bookmarkId === bookmarkId) {
+      node.scrollIntoView?.({ block: 'nearest' })
+      break
+    }
+  }
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  const tag = target.tagName
+  return (
+    tag === 'INPUT' ||
+    tag === 'TEXTAREA' ||
+    tag === 'SELECT' ||
+    target.isContentEditable
+  )
+}
+
 export function NavApp() {
   const store = useNavStore()
   const { adminMode, setAdminMode } = store
@@ -103,11 +143,18 @@ export function NavApp() {
   const [activeDrag, setActiveDrag] = useState<ActiveDrag>(null)
   const [dragDraftGroups, setDragDraftGroups] = useState<Group[] | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [selectedSearchId, setSelectedSearchId] = useState<string | null>(null)
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
   const [navigationOpen, setNavigationOpen] = useState(false)
-  const navigationTriggerRef = useRef<HTMLButtonElement>(null)
+  const [undoState, setUndoState] = useState<UndoState | null>(null)
+  const [importError, setImportError] = useState<string | null>(null)
 
+  const navigationTriggerRef = useRef<HTMLButtonElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const mobileSearchInputRef = useRef<HTMLInputElement>(null)
   const activeDragRef = useRef<ActiveDrag>(null)
   const dragDraftGroupsRef = useRef<Group[] | null>(null)
+  const undoCounterRef = useRef(0)
 
   const sortedStoreGroups = useMemo(
     () => [...store.groups].sort((a, b) => a.order - b.order),
@@ -123,18 +170,33 @@ export function NavApp() {
 
   const filteredGroups = useMemo(() => {
     if (!normalizedSearchQuery) return effectiveGroups
-    const q = normalizedSearchQuery
     return effectiveGroups
       .map((group) => ({
         ...group,
-        bookmarks: group.bookmarks.filter(
-          (b) =>
-            b.name.toLowerCase().includes(q) ||
-            b.url.toLowerCase().includes(q)
+        bookmarks: group.bookmarks.filter((b) =>
+          bookmarkMatchesQuery(b, normalizedSearchQuery)
         ),
       }))
       .filter((group) => group.bookmarks.length > 0)
   }, [effectiveGroups, normalizedSearchQuery])
+
+  const matchedBookmarks = useMemo(() => {
+    if (!normalizedSearchQuery) return []
+    const list: Bookmark[] = []
+    for (const group of filteredGroups) {
+      const sorted = [...group.bookmarks].sort((a, b) => a.order - b.order)
+      list.push(...sorted)
+    }
+    return list
+  }, [filteredGroups, normalizedSearchQuery])
+
+  const activeSearchBookmarkId = useMemo(() => {
+    if (!normalizedSearchQuery || matchedBookmarks.length === 0) return null
+    if (selectedSearchId && matchedBookmarks.some((b) => b.id === selectedSearchId)) {
+      return selectedSearchId
+    }
+    return matchedBookmarks[0]?.id ?? null
+  }, [matchedBookmarks, normalizedSearchQuery, selectedSearchId])
 
   const sidebarItems = useMemo(
     () => buildSidebarItems(sortedStoreGroups, searchQuery),
@@ -163,6 +225,15 @@ export function NavApp() {
     clearToken()
     window.location.reload()
   }
+  const activeToken = getToken()
+  const hasPasswordSession = Boolean(activeToken && activeToken !== 'no-auth-required')
+
+  const openModal = useCallback((nextModal: ModalState) => {
+    if (nextModal.type !== 'none') {
+      setUndoState(null)
+    }
+    setModal(nextModal)
+  }, [])
 
   const handleGroupSelect = (id: string) => {
     const target = document.getElementById(`group-${id}`)
@@ -178,16 +249,177 @@ export function NavApp() {
     })
   }
 
+  const focusSearch = useCallback(() => {
+    const desktopInput = searchInputRef.current
+    const isDesktopVisible =
+      desktopInput !== null &&
+      (desktopInput.offsetParent !== null ||
+        (typeof window.matchMedia === 'function' &&
+          window.matchMedia('(min-width: 768px)').matches))
+
+    if (isDesktopVisible && desktopInput) {
+      desktopInput.focus()
+      desktopInput.select()
+      return
+    }
+
+    if (mobileSearchOpen && mobileSearchInputRef.current) {
+      mobileSearchInputRef.current.focus()
+      mobileSearchInputRef.current.select()
+      return
+    }
+
+    setMobileSearchOpen(true)
+  }, [mobileSearchOpen])
+
+  // Global keyboard shortcuts: blocked while modal or mobile drawer is open
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return
+      if (modal.type !== 'none' || navigationOpen) return
+
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toUpperCase() === 'A') {
         e.preventDefault()
         setAdminMode(!adminMode)
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        focusSearch()
+        return
+      }
+
+      if (
+        e.key === '/' &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        !isEditableTarget(e.target)
+      ) {
+        e.preventDefault()
+        focusSearch()
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [adminMode, setAdminMode])
+  }, [adminMode, focusSearch, modal.type, navigationOpen, setAdminMode])
+
+  const handleSearchKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (!normalizedSearchQuery || matchedBookmarks.length === 0) return
+
+      const currentIndex = Math.max(
+        0,
+        matchedBookmarks.findIndex((b) => b.id === activeSearchBookmarkId)
+      )
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        const next = matchedBookmarks[(currentIndex + 1) % matchedBookmarks.length]
+        if (next) {
+          setSelectedSearchId(next.id)
+          scrollBookmarkCardIntoView(next.id)
+        }
+        return
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        const prev =
+          matchedBookmarks[
+            (currentIndex - 1 + matchedBookmarks.length) % matchedBookmarks.length
+          ]
+        if (prev) {
+          setSelectedSearchId(prev.id)
+          scrollBookmarkCardIntoView(prev.id)
+        }
+        return
+      }
+
+      if (event.key === 'Enter') {
+        const target = matchedBookmarks[currentIndex]
+        if (!target) return
+        event.preventDefault()
+        store.recordClick(target.id)
+        window.open(target.url, '_blank', 'noopener,noreferrer')
+      }
+    },
+    [activeSearchBookmarkId, matchedBookmarks, normalizedSearchQuery, store]
+  )
+
+  const pushUndo = useCallback((label: string, target: UndoTarget) => {
+    undoCounterRef.current += 1
+    setUndoState({
+      id: undoCounterRef.current,
+      label,
+      target,
+    })
+  }, [])
+
+  const handleApplyUndo = useCallback(() => {
+    if (!undoState) return
+    const { target } = undoState
+    setUndoState(null)
+    if (target.kind === 'bookmark') {
+      store.restoreBookmark(target.groupId, target.bookmark, target.index)
+    } else {
+      store.restoreGroup(target.group, target.index)
+    }
+  }, [store, undoState])
+
+  const handleDeleteBookmarkWithUndo = useCallback(
+    (groupId: string, bookmarkId: string) => {
+      const group = sortedStoreGroups.find((g) => g.id === groupId)
+      if (!group) return
+      const sorted = [...group.bookmarks].sort((a, b) => a.order - b.order)
+      const index = sorted.findIndex((b) => b.id === bookmarkId)
+      const bookmark = index >= 0 ? structuredClone(sorted[index]) : undefined
+
+      store.deleteBookmark(groupId, bookmarkId)
+      if (bookmark) {
+        pushUndo(`已删除「${bookmark.name}」`, {
+          kind: 'bookmark',
+          groupId,
+          bookmark,
+          index,
+        })
+      }
+    },
+    [pushUndo, sortedStoreGroups, store]
+  )
+
+  const handleDeleteGroupConfirmed = useCallback(
+    (groupId: string) => {
+      const index = sortedStoreGroups.findIndex((g) => g.id === groupId)
+      const group = index >= 0 ? structuredClone(sortedStoreGroups[index]) : undefined
+      store.deleteGroup(groupId)
+      if (group) {
+        pushUndo(`已删除分组「${group.name}」`, {
+          kind: 'group',
+          group,
+          index,
+        })
+      }
+    },
+    [pushUndo, sortedStoreGroups, store]
+  )
+
+  const handleRequestDeleteGroup = useCallback(
+    (group: Group) => {
+      if (group.bookmarks.length === 0) {
+        handleDeleteGroupConfirmed(group.id)
+        return
+      }
+      openModal({
+        type: 'deleteGroup',
+        groupId: group.id,
+        name: group.name,
+        count: group.bookmarks.length,
+      })
+    },
+    [handleDeleteGroupConfirmed, openModal]
+  )
 
   const resetDragState = () => {
     activeDragRef.current = null
@@ -381,12 +613,11 @@ export function NavApp() {
         : store.syncError
           ? '同步失败'
           : store.syncMode === 'checking'
-            ? '连接云端中'
+            ? '连接中'
             : '已同步'
 
-  const activeNotice =
-    store.syncNotice ??
-    (store.syncError ? { message: store.syncError, retryable: store.syncMode !== 'local' } : null)
+  const activeErrorMessage = importError ?? store.syncNotice?.message ?? null
+  const activeErrorRetryable = importError ? false : (store.syncNotice?.retryable ?? false)
 
   return (
     <div
@@ -395,7 +626,6 @@ export function NavApp() {
         '--sticky-navigation-offset': `${stickyAnchorTop + 16}px`,
       } as CSSProperties}
     >
-      {/* Custom background layer + readability overlay */}
       {bg.type !== 'none' && (
         <>
           <div
@@ -423,17 +653,27 @@ export function NavApp() {
           syncError={store.syncError}
           onRetrySync={store.retrySyncToCloud}
           searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
+          searchInputRef={searchInputRef}
+          mobileSearchInputRef={mobileSearchInputRef}
+          mobileSearchOpen={mobileSearchOpen}
+          onMobileSearchOpenChange={setMobileSearchOpen}
+          onSearchChange={(q) => {
+            setSearchQuery(q)
+            setSelectedSearchId(null)
+          }}
+          onSearchKeyDown={handleSearchKeyDown}
           onThemeChange={store.setTheme}
           onTitleChange={store.setTitle}
           onAdminToggle={() => store.setAdminMode(!store.adminMode)}
-          onAddGroup={() => setModal({ type: 'addGroup' })}
+          onAddGroup={() => openModal({ type: 'addGroup' })}
           onExport={store.exportData}
-          onImportFile={(data, fileName) =>
-            setModal({ type: 'importMode', data, fileName })
-          }
-          onLogout={handleLogout}
-          onOpenBackground={() => setModal({ type: 'background' })}
+          onImportFile={(data, fileName) => {
+            setImportError(null)
+            openModal({ type: 'importMode', data, fileName })
+          }}
+          onImportError={(msg) => setImportError(msg)}
+          onLogout={hasPasswordSession ? handleLogout : undefined}
+          onOpenBackground={() => openModal({ type: 'background' })}
           navigationOpen={navigationOpen}
           onNavigationOpenChange={setNavigationOpen}
           navigationTriggerRef={navigationTriggerRef}
@@ -456,31 +696,31 @@ export function NavApp() {
           />
 
           <div className="min-w-0 flex-1">
-            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-7">
               {store.adminMode && (
                 <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary/10 border border-primary/20 text-primary text-sm font-medium">
-                  <span className="size-2 rounded-full bg-primary inline-block" />
-                  管理模式：点卡片照常打开，可拖拽、编辑或标重点
+                  <span className="size-2 rounded-full bg-primary inline-block shrink-0" />
+                  <span>管理模式：点卡片照常打开，可拖拽或编辑</span>
                 </div>
               )}
 
               {filteredGroups.length === 0 && !normalizedSearchQuery ? (
                 <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
-                  <p className="text-muted-foreground text-base">暂无书签分组</p>
+                  <p className="text-muted-foreground text-base">还没有分组</p>
                   {store.adminMode && (
                     <button
                       type="button"
-                      onClick={() => setModal({ type: 'addGroup' })}
+                      onClick={() => openModal({ type: 'addGroup' })}
                       className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity"
                     >
-                      创建第一个分组
+                      新建分组
                     </button>
                   )}
                 </div>
               ) : filteredGroups.length === 0 && normalizedSearchQuery ? (
                 <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
                   <p className="text-muted-foreground text-base">
-                    未找到匹配「{searchQuery}」的书签
+                    没找到「{searchQuery.trim()}」
                   </p>
                   <button
                     type="button"
@@ -500,7 +740,7 @@ export function NavApp() {
                   onDragCancel={resetDragState}
                 >
                   <SortableContext items={visibleGroupIds} strategy={verticalListSortingStrategy}>
-                    <div className="flex flex-col gap-8">
+                    <div className="flex flex-col gap-7">
                       {filteredGroups.map((group) => (
                         <SortableGroup
                           key={group.id}
@@ -508,24 +748,18 @@ export function NavApp() {
                           adminMode={store.adminMode}
                           dragEnabled={dragEnabled}
                           bookmarkDragEnabled={bookmarkDragEnabled}
-                          onAddBookmark={(gId) => setModal({ type: 'addBookmark', groupId: gId })}
+                          forceExpanded={normalizedSearchQuery.length > 0}
+                          selectedBookmarkId={activeSearchBookmarkId}
+                          onAddBookmark={(gId) => openModal({ type: 'addBookmark', groupId: gId })}
                           onEditBookmark={(gId, bm) =>
-                            setModal({ type: 'editBookmark', groupId: gId, bookmark: bm })
+                            openModal({ type: 'editBookmark', groupId: gId, bookmark: bm })
                           }
                           onDeleteBookmark={(gId, bId) => {
-                            const bm = group.bookmarks.find((b) => b.id === bId)
-                            setModal({
-                              type: 'deleteBookmark',
-                              groupId: gId,
-                              bookmarkId: bId,
-                              name: bm?.name ?? '',
-                            })
+                            handleDeleteBookmarkWithUndo(gId, bId)
                           }}
                           onTogglePin={(gId, bId) => store.togglePinBookmark(gId, bId)}
-                          onEditGroup={(g) => setModal({ type: 'editGroup', group: g })}
-                          onDeleteGroup={(gId) =>
-                            setModal({ type: 'deleteGroup', groupId: gId, name: group.name })
-                          }
+                          onEditGroup={(g) => openModal({ type: 'editGroup', group: g })}
+                          onDeleteGroup={() => handleRequestDeleteGroup(group)}
                           onToggleCollapse={store.toggleGroupCollapsed}
                           onOpenBookmark={store.recordClick}
                         />
@@ -534,11 +768,11 @@ export function NavApp() {
                       {store.adminMode && !normalizedSearchQuery && (
                         <button
                           type="button"
-                          onClick={() => setModal({ type: 'addGroup' })}
+                          onClick={() => openModal({ type: 'addGroup' })}
                           className="w-full rounded-2xl border-2 border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary transition-colors py-5 text-sm flex items-center justify-center gap-2"
                         >
                           <span className="text-lg font-light leading-none">+</span>
-                          <span>添加分组</span>
+                          <span>新建分组</span>
                         </button>
                       )}
                     </div>
@@ -626,18 +860,12 @@ export function NavApp() {
           />
         )}
 
-        {modal.type === 'deleteBookmark' && (
-          <ConfirmDeleteModal
-            message={`确定要删除书签「${modal.name}」吗？此操作不可撤销。`}
-            onConfirm={() => store.deleteBookmark(modal.groupId, modal.bookmarkId)}
-            onClose={() => setModal({ type: 'none' })}
-          />
-        )}
-
         {modal.type === 'deleteGroup' && (
           <ConfirmDeleteModal
-            message={`确定要删除分组「${modal.name}」及其全部书签吗？此操作不可撤销。`}
-            onConfirm={() => store.deleteGroup(modal.groupId)}
+            message={`确定删除分组「${modal.name}」及组内 ${modal.count} 个书签？`}
+            onConfirm={() => {
+              handleDeleteGroupConfirmed(modal.groupId)
+            }}
             onClose={() => setModal({ type: 'none' })}
           />
         )}
@@ -645,7 +873,10 @@ export function NavApp() {
         {modal.type === 'importMode' && (
           <ImportModeModal
             fileName={modal.fileName}
-            onImport={(mode) => store.importData(modal.data, mode)}
+            onImport={(mode) => {
+              setUndoState(null)
+              store.importData(modal.data, mode)
+            }}
             onClose={() => setModal({ type: 'none' })}
           />
         )}
@@ -658,14 +889,82 @@ export function NavApp() {
           />
         )}
 
-        {/* Sync Error Toast */}
-        <SyncErrorToast
-          error={store.syncNotice?.message ?? null}
-          showRetry={activeNotice?.retryable ?? false}
-          onRetry={store.retrySyncToCloud}
-          onDismiss={store.clearSyncError}
-        />
+        {/* Transient Notifications Region (Undo & Sync/Import Errors) */}
+        <div
+          role="region"
+          aria-label="状态通知"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2 max-w-[calc(100vw-2rem)] pointer-events-none"
+        >
+          {undoState && modal.type === 'none' && (
+            <UndoToast
+              key={undoState.id}
+              label={undoState.label}
+              onUndo={handleApplyUndo}
+              onDismiss={() => setUndoState(null)}
+            />
+          )}
+
+          {activeErrorMessage && modal.type === 'none' && (
+            <SyncErrorToast
+              error={activeErrorMessage}
+              showRetry={activeErrorRetryable}
+              onRetry={store.retrySyncToCloud}
+              onDismiss={() => {
+                if (importError) setImportError(null)
+                else store.clearSyncError()
+              }}
+            />
+          )}
+        </div>
       </div>
+    </div>
+  )
+}
+
+function UndoToast({
+  label,
+  onUndo,
+  onDismiss,
+}: {
+  label: string
+  onUndo: () => void
+  onDismiss: () => void
+}) {
+  const [paused, setPaused] = useState(false)
+
+  useEffect(() => {
+    if (paused) return
+    const timer = setTimeout(onDismiss, 6000)
+    return () => clearTimeout(timer)
+  }, [paused, onDismiss])
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      onPointerEnter={() => setPaused(true)}
+      onPointerLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+      className="pointer-events-auto flex items-center gap-3 px-4 py-2.5 rounded-xl border border-border bg-popover text-popover-foreground shadow-lg animate-in slide-in-from-bottom-3 fade-in duration-200"
+    >
+      <span className="text-sm truncate max-w-[14rem] sm:max-w-xs">{label}</span>
+      <button
+        type="button"
+        onClick={onUndo}
+        className="flex items-center gap-1 px-2.5 py-1 rounded-md bg-primary text-primary-foreground hover:opacity-90 transition-opacity text-xs font-medium shrink-0"
+      >
+        <Undo2 size={12} />
+        撤销
+      </button>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+        aria-label="关闭提示"
+      >
+        <X size={14} />
+      </button>
     </div>
   )
 }
@@ -676,43 +975,48 @@ function SyncErrorToast({
   onRetry,
   onDismiss,
 }: {
-  error: string | null
+  error: string
   showRetry?: boolean
   onRetry: () => void
   onDismiss: () => void
 }) {
+  const [paused, setPaused] = useState(false)
+
   useEffect(() => {
-    if (!error) return
+    if (paused) return
     const timer = setTimeout(onDismiss, 8000)
     return () => clearTimeout(timer)
-  }, [error, onDismiss])
-
-  if (!error) return null
+  }, [error, paused, onDismiss])
 
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-bottom-4 fade-in duration-300">
-      <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-destructive text-destructive-foreground shadow-lg">
-        <AlertTriangle size={18} />
-        <span className="text-sm font-medium">{error}</span>
-        {showRetry && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="flex items-center gap-1 px-2 py-1 rounded-md bg-destructive-foreground/20 hover:bg-destructive-foreground/30 transition-colors text-xs font-medium"
-          >
-            <RefreshCw size={12} />
-            重试
-          </button>
-        )}
+    <div
+      role="alert"
+      onPointerEnter={() => setPaused(true)}
+      onPointerLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+      className="pointer-events-auto flex items-center gap-3 px-4 py-2.5 rounded-xl bg-destructive text-destructive-foreground shadow-lg animate-in slide-in-from-bottom-3 fade-in duration-200"
+    >
+      <AlertTriangle size={16} className="shrink-0" />
+      <span className="text-sm font-medium">{error}</span>
+      {showRetry && (
         <button
           type="button"
-          onClick={onDismiss}
-          className="p-1 rounded-md hover:bg-destructive-foreground/20 transition-colors"
-          aria-label="关闭"
+          onClick={onRetry}
+          className="flex items-center gap-1 px-2 py-1 rounded-md bg-destructive-foreground/20 hover:bg-destructive-foreground/30 transition-colors text-xs font-medium shrink-0"
         >
-          <X size={14} />
+          <RefreshCw size={12} />
+          重试
         </button>
-      </div>
+      )}
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="p-1 rounded-md hover:bg-destructive-foreground/20 transition-colors shrink-0"
+        aria-label="关闭"
+      >
+        <X size={14} />
+      </button>
     </div>
   )
 }

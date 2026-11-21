@@ -38,18 +38,22 @@ export function FaviconImage({ url, name, customIcon, className = 'size-9 rounde
     const { Icon } = builtin
     return (
       <div
-        className={`flex-shrink-0 overflow-hidden flex items-center justify-center ${className}`}
-        style={{ backgroundColor: `${avatarColor}22`, color: avatarColor }}
+        className={`flex-shrink-0 overflow-hidden flex items-center justify-center ring-1 ring-inset ring-foreground/[0.06] ${className}`}
+        style={{ backgroundColor: `${avatarColor}1E`, color: avatarColor }}
       >
-        <Icon className="size-[55%]" strokeWidth={2} aria-hidden="true" />
+        <Icon className="size-[52%]" strokeWidth={2} aria-hidden="true" />
       </div>
     )
   }
 
   return (
     <div
-      className={`flex-shrink-0 overflow-hidden flex items-center justify-center text-white text-sm font-semibold ${className}`}
-      style={exhausted ? { backgroundColor: avatarColor } : undefined}
+      className={`flex-shrink-0 overflow-hidden flex items-center justify-center ${
+        exhausted
+          ? 'text-white text-sm font-semibold tracking-tight ring-1 ring-inset ring-white/20 shadow-2xs'
+          : 'p-1.5 ring-1 ring-inset ring-foreground/[0.08]'
+      } ${className}`}
+      style={{ backgroundColor: exhausted ? avatarColor : 'var(--favicon-well)' }}
     >
       {!exhausted ? (
         <img
@@ -57,7 +61,7 @@ export function FaviconImage({ url, name, customIcon, className = 'size-9 rounde
           alt={name}
           width={36}
           height={36}
-          className="size-full object-contain"
+          className="size-full rounded-[4px] object-contain"
           onError={() => setSourceState((current) => ({
             key: sourceKey,
             index: current.key === sourceKey ? current.index + 1 : 1,

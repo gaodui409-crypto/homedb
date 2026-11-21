@@ -12,6 +12,7 @@ interface BookmarkCardProps {
   bookmark: Bookmark
   adminMode: boolean
   dragEnabled?: boolean
+  isSearchSelected?: boolean
   onEdit: (bookmark: Bookmark) => void
   onDelete: (id: string) => void
   onTogglePin?: (id: string) => void
@@ -22,6 +23,7 @@ export function BookmarkCard({
   bookmark,
   adminMode,
   dragEnabled = adminMode,
+  isSearchSelected = false,
   onEdit,
   onDelete,
   onTogglePin,
@@ -56,12 +58,20 @@ export function BookmarkCard({
     window.open(bookmark.url, '_blank', 'noopener,noreferrer')
   }
 
+  const cardSurfaceClass = isSearchSelected
+    ? 'border-primary bg-primary/[0.04] ring-2 ring-primary/30'
+    : bookmark.pinned
+      ? 'border-primary/25 bg-card hover:border-primary/45'
+      : 'border-border/80 bg-card hover:border-border'
+
   return (
     <div
       ref={setNodeRef}
       style={style}
+      data-bookmark-id={bookmark.id}
+      data-search-selected={isSearchSelected ? 'true' : undefined}
       {...(dragEnabled ? { ...attributes, ...listeners } : {})}
-      className={`nav-card group relative flex items-center gap-3 rounded-xl bg-card p-3 select-none transition-all duration-200 cursor-pointer ${isDragging ? 'ring-2 ring-primary/40' : ''}`}
+      className={`nav-card group relative flex items-center gap-3 rounded-xl border p-3 select-none cursor-pointer ${cardSurfaceClass} ${isDragging ? 'ring-2 ring-primary/40' : ''}`}
       onClick={handleClick}
       role="link"
       tabIndex={0}
@@ -88,7 +98,11 @@ export function BookmarkCard({
           <p className="min-w-0 flex-1 truncate text-sm font-medium leading-tight text-card-foreground">
             {bookmark.name}
           </p>
-          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+          <span
+            className={`ml-auto flex shrink-0 items-center gap-0.5 ${
+              adminMode ? '[@media(hover:hover)]:sm:group-hover:invisible' : ''
+            }`}
+          >
             {(bookmark.clicks ?? 0) >= 3 && (
               <span
                 role="img"
@@ -96,7 +110,7 @@ export function BookmarkCard({
                 title={`常用，已打开 ${bookmark.clicks} 次`}
                 className="flex size-5 items-center justify-center text-orange-500"
               >
-                <Flame aria-hidden="true" className="size-3" />
+                <Flame aria-hidden="true" className="size-3.5" />
               </span>
             )}
             {bookmark.pinned && (
@@ -117,10 +131,19 @@ export function BookmarkCard({
         </p>
       </div>
 
-      {/* Admin Actions - mobile: always visible; desktop: hover or focus to show */}
+      {isSearchSelected && !adminMode && (
+        <kbd
+          aria-hidden="true"
+          className="hidden sm:inline-flex shrink-0 items-center justify-center rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-primary"
+        >
+          ↵
+        </kbd>
+      )}
+
+      {/* Admin Actions - touch/mobile: inline & always visible; hover-capable desktop (sm+): floating pill on hover/focus */}
       {adminMode && (
         <div
-          className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity"
+          className="flex items-center gap-0.5 shrink-0 [@media(hover:hover)]:sm:absolute [@media(hover:hover)]:sm:right-2 [@media(hover:hover)]:sm:top-1/2 [@media(hover:hover)]:sm:-translate-y-1/2 [@media(hover:hover)]:sm:z-20 [@media(hover:hover)]:sm:rounded-lg [@media(hover:hover)]:sm:border [@media(hover:hover)]:sm:border-border [@media(hover:hover)]:sm:bg-card [@media(hover:hover)]:sm:px-1 [@media(hover:hover)]:sm:py-0.5 [@media(hover:hover)]:sm:shadow-sm opacity-100 [@media(hover:hover)]:sm:opacity-0 [@media(hover:hover)]:sm:pointer-events-none [@media(hover:hover)]:sm:group-hover:opacity-100 [@media(hover:hover)]:sm:group-hover:pointer-events-auto [@media(hover:hover)]:sm:group-focus-within:opacity-100 [@media(hover:hover)]:sm:group-focus-within:pointer-events-auto transition-opacity"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}

@@ -278,6 +278,47 @@ describe('NavHeader search', () => {
     expect(
       screen.queryByRole('searchbox', { name: '手机搜索书签' })
     ).toBeNull()
+
+    // Re-open mobile search and close via the left back arrow -> must also clear search query!
+    await user.click(screen.getByRole('button', { name: '打开搜索' }))
+    onSearchChange.mockClear()
+    await user.click(screen.getByRole('button', { name: '关闭搜索' }))
+    expect(onSearchChange).toHaveBeenCalledWith('')
+    expect(
+      screen.queryByRole('searchbox', { name: '手机搜索书签' })
+    ).toBeNull()
+  })
+
+  it('guards Enter keydown during IME composition so Chinese input confirmation never launches prematurely', () => {
+    const onSearchKeyDown = vi.fn()
+    render(
+      <NavHeader
+        title="HomeDB"
+        theme="light"
+        adminMode={false}
+        searchQuery="nei"
+        onSearchChange={vi.fn()}
+        onSearchKeyDown={onSearchKeyDown}
+        onThemeChange={vi.fn()}
+        onTitleChange={vi.fn()}
+        onAdminToggle={vi.fn()}
+        onAddGroup={vi.fn()}
+        onExport={vi.fn()}
+        onImportFile={vi.fn()}
+        onOpenBackground={vi.fn()}
+      />
+    )
+
+    const search = screen.getByRole('searchbox', { name: '搜索书签' })
+
+    // IME composing Enter (keyCode 229 or isComposing) must be ignored
+    fireEvent.keyDown(search, { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(search, { key: 'Enter', keyCode: 229 })
+    expect(onSearchKeyDown).not.toHaveBeenCalled()
+
+    // Non-composing Enter forwards cleanly
+    fireEvent.keyDown(search, { key: 'Enter', isComposing: false, keyCode: 13 })
+    expect(onSearchKeyDown).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -324,6 +365,6 @@ describe('NavHeader data import', () => {
       }),
     ], 'incompatible.json', { type: 'application/json' }))
 
-    expect(alertSpy).toHaveBeenCalledWith('JSON 数据内容不兼容，请检查分组、书签和网址字段。')
+    expect(alertSpy).toHaveBeenCalledWith('书签格式不对，请检查分组名、名称和网址')
   })
 })

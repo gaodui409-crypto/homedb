@@ -1,4 +1,4 @@
-import type { Group } from './types'
+import type { Bookmark, Group } from './types'
 
 export const SIDEBAR_COLLAPSED_KEY = 'mininav_sidebar_collapsed'
 
@@ -14,6 +14,18 @@ export function normalizeSearchQuery(query: string): string {
   return query.trim().toLowerCase()
 }
 
+export function bookmarkMatchesQuery(
+  bookmark: Pick<Bookmark, 'name' | 'url' | 'note'>,
+  normalizedQuery: string
+): boolean {
+  if (!normalizedQuery) return true
+  return (
+    bookmark.name.toLowerCase().includes(normalizedQuery) ||
+    bookmark.url.toLowerCase().includes(normalizedQuery) ||
+    (bookmark.note?.toLowerCase().includes(normalizedQuery) ?? false)
+  )
+}
+
 export function buildSidebarItems(groups: Group[], query: string): SidebarItem[] {
   const normalizedQuery = normalizeSearchQuery(query)
   const hasQuery = normalizedQuery.length > 0
@@ -21,8 +33,7 @@ export function buildSidebarItems(groups: Group[], query: string): SidebarItem[]
   return groups.map((group) => {
     const count = hasQuery
       ? group.bookmarks.filter((bookmark) =>
-          bookmark.name.toLowerCase().includes(normalizedQuery) ||
-          bookmark.url.toLowerCase().includes(normalizedQuery)
+          bookmarkMatchesQuery(bookmark, normalizedQuery)
         ).length
       : group.bookmarks.length
 

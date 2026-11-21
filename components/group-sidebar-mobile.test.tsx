@@ -319,7 +319,7 @@ describe('MobileGroupDrawer', () => {
 
     expect(screen.getByRole('heading', { name: '分组' })).toBeTruthy()
     expect(
-      screen.getByText('选择分组后将跳转到对应的书签区域。').className
+      screen.getByText('点击分组跳到对应位置').className
     ).toContain('sr-only')
 
     const enabled = screen.getByRole('button', {

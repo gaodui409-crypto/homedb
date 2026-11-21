@@ -1,12 +1,10 @@
-import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import type { Metadata, Viewport } from 'next'
 import { Analytics } from '@vercel/analytics/next'
 import './globals.css'
 
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-})
+export const viewport: Viewport = {
+  colorScheme: 'light dark',
+}
 
 export const metadata: Metadata = {
   title: 'MiniNav - 我的导航',
@@ -18,14 +16,19 @@ export const metadata: Metadata = {
   },
 }
 
+const THEME_INIT_SCRIPT = `try{var t=localStorage.getItem('mininav_theme');var h=document.documentElement;if(t==='dark'){h.classList.add('theme-dark');h.style.colorScheme='dark'}else if(t==='sepia'){h.classList.add('theme-sepia');h.style.colorScheme='light'}else{h.style.colorScheme='light'}}catch(e){}`
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode
 }>) {
   return (
-    <html lang="zh-CN" className="bg-background">
-      <body className={`${inter.variable} font-sans antialiased`}>
+    <html lang="zh-CN" className="bg-background" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
+      <body className="font-sans antialiased">
         {children}
         <Analytics />
       </body>

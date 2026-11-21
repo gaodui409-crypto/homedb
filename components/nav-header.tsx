@@ -21,12 +21,18 @@ interface NavHeaderBaseProps {
   onRetrySync?: () => void
   searchQuery: string
   onSearchChange: (query: string) => void
+  onSearchKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void
+  searchInputRef?: RefObject<HTMLInputElement | null>
+  mobileSearchInputRef?: RefObject<HTMLInputElement | null>
+  mobileSearchOpen?: boolean
+  onMobileSearchOpenChange?: (open: boolean) => void
   onThemeChange: (t: Theme) => void
   onTitleChange: (t: string) => void
   onAdminToggle: () => void
   onAddGroup: () => void
   onExport: () => void
   onImportFile: (data: ImportNavData, fileName: string) => void
+  onImportError?: (message: string) => void
   onLogout?: () => void
   onOpenBackground: () => void
 }
@@ -54,39 +60,70 @@ const THEMES: { key: Theme; icon: React.ReactNode; label: string }[] = [
 interface SearchFieldProps {
   query: string
   label: string
+  inputRef?: RefObject<HTMLInputElement | null>
   autoFocus?: boolean
+  showShortcutHint?: boolean
   onChange: (query: string) => void
+  onKeyDown?: (event: KeyboardEvent<HTMLInputElement>) => void
   onEscape?: () => void
 }
 
 function SearchField({
   query,
   label,
+  inputRef,
   autoFocus,
+  showShortcutHint = false,
   onChange,
+  onKeyDown,
   onEscape,
 }: SearchFieldProps) {
+  const lastCompositionEndRef = useRef<number | null>(null)
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key !== 'Escape') return
-    event.preventDefault()
-    onChange('')
-    onEscape?.()
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      const hadQuery = query.length > 0
+      onChange('')
+      onEscape?.()
+      if (!hadQuery) {
+        event.currentTarget.blur()
+      }
+      return
+    }
+
+    if (event.key === 'Enter') {
+      if (
+        event.nativeEvent.isComposing ||
+        event.keyCode === 229 ||
+        (lastCompositionEndRef.current !== null &&
+          Math.abs(event.timeStamp - lastCompositionEndRef.current) < 50)
+      ) {
+        return
+      }
+    }
+
+    onKeyDown?.(event)
   }
 
   return (
-    <div className="flex h-8 min-w-0 flex-1 items-center rounded-[8px] border border-border bg-background focus-within:ring-2 focus-within:ring-primary/30">
+    <div className="group/search flex h-8 min-w-0 flex-1 items-center rounded-[8px] border border-border bg-background/90 transition-colors focus-within:border-primary/50 focus-within:bg-background focus-within:ring-2 focus-within:ring-primary/20">
       <Search aria-hidden="true" className="ml-2.5 size-3.5 shrink-0 text-muted-foreground" />
       <input
+        ref={inputRef}
         type="search"
         aria-label={label}
         autoFocus={autoFocus}
-        placeholder="搜索书签..."
+        placeholder="搜名称、网址、备注"
         value={query}
         onChange={(event) => onChange(event.target.value)}
+        onCompositionEnd={(event) => {
+          lastCompositionEndRef.current = event.timeStamp
+        }}
         onKeyDown={handleKeyDown}
         className="h-full min-w-0 flex-1 bg-transparent px-2 text-xs text-foreground outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden"
       />
-      {query && (
+      {query ? (
         <button
           type="button"
           aria-label="清除搜索"
@@ -95,6 +132,15 @@ function SearchField({
         >
           <X aria-hidden="true" className="size-3" />
         </button>
+      ) : (
+        showShortcutHint && (
+          <kbd
+            aria-hidden="true"
+            className="mr-2 hidden shrink-0 rounded border border-border/80 bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground group-focus-within/search:hidden lg:inline-block"
+          >
+            /
+          </kbd>
+        )
       )}
     </div>
   )
@@ -109,28 +155,46 @@ export function NavHeader({
   syncError,
   onRetrySync,
   searchQuery,
+  searchInputRef,
+  mobileSearchInputRef,
+  mobileSearchOpen: controlledMobileSearchOpen,
+  onMobileSearchOpenChange,
   navigationOpen,
   onNavigationOpenChange,
   navigationTriggerRef,
   onThemeChange,
   onSearchChange,
+  onSearchKeyDown,
   onTitleChange,
   onAdminToggle,
   onAddGroup,
   onExport,
   onImportFile,
+  onImportError,
   onLogout,
   onOpenBackground,
 }: NavHeaderProps) {
   const [editingTitle, setEditingTitle] = useState(false)
   const [draftTitle, setDraftTitle] = useState(title)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const [mobileSearchOpen, setMobileSearchOpen] = useState(false)
+  const [internalMobileSearchOpen, setInternalMobileSearchOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const mobileSearchOpen = controlledMobileSearchOpen ?? internalMobileSearchOpen
+  const setMobileSearchOpen = onMobileSearchOpenChange ?? setInternalMobileSearchOpen
+
   const matchedThemeIndex = THEMES.findIndex(({ key }) => key === theme)
   const currentThemeIndex = matchedThemeIndex >= 0 ? matchedThemeIndex : 0
   const currentTheme = THEMES[currentThemeIndex]
   const nextTheme = THEMES[(currentThemeIndex + 1) % THEMES.length]
+
+  const notifyImportError = (message: string) => {
+    if (onImportError) {
+      onImportError(message)
+    } else if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert(message)
+    }
+  }
 
   const commitTitle = () => {
     const trimmed = draftTitle.trim()
@@ -143,7 +207,7 @@ export function NavHeader({
     const file = e.target.files?.[0]
     if (!file) return
     if (file.size > 1024 * 1024) {
-      alert('JSON 文件不能超过 1 MB。')
+      notifyImportError('文件不能超过 1 MB')
       e.target.value = ''
       return
     }
@@ -153,7 +217,7 @@ export function NavHeader({
       try {
         input = JSON.parse(ev.target?.result as string)
       } catch {
-        alert('JSON 文件解析失败，请检查格式。')
+        notifyImportError('不是有效的 JSON 文件')
         return
       }
 
@@ -161,7 +225,7 @@ export function NavHeader({
         const data = importNavDataSchema.parse(input)
         onImportFile(data, file.name)
       } catch {
-        alert('JSON 数据内容不兼容，请检查分组、书签和网址字段。')
+        notifyImportError('书签格式不对，请检查分组名、名称和网址')
       }
     }
     reader.readAsText(file)
@@ -178,22 +242,25 @@ export function NavHeader({
         : syncError
           ? `${syncError}（点击重试）`
           : syncMode === 'checking'
-            ? '连接云端中'
+            ? '连接中'
             : '已同步'
 
   return (
     <header
       data-nav-header="true"
-      className="sticky top-0 z-30 bg-background/80 backdrop-blur-md border-b border-border"
+      className="sticky top-0 z-30 bg-background/85 backdrop-blur-md border-b border-border/80"
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center gap-3 h-14">
+        <div className="flex items-center gap-2 sm:gap-3 h-14">
           {mobileSearchOpen ? (
             <div data-mobile-search="true" className="flex min-w-0 flex-1 items-center gap-2 md:hidden">
               <button
                 type="button"
                 aria-label="关闭搜索"
-                onClick={() => setMobileSearchOpen(false)}
+                onClick={() => {
+                  onSearchChange('')
+                  setMobileSearchOpen(false)
+                }}
                 className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
               >
                 <ArrowLeft aria-hidden="true" className="size-4" />
@@ -201,8 +268,10 @@ export function NavHeader({
               <SearchField
                 query={searchQuery}
                 label="手机搜索书签"
+                inputRef={mobileSearchInputRef}
                 autoFocus
                 onChange={onSearchChange}
+                onKeyDown={onSearchKeyDown}
                 onEscape={() => setMobileSearchOpen(false)}
               />
             </div>
@@ -281,11 +350,14 @@ export function NavHeader({
                 )}
               </div>
 
-              <div className="hidden w-40 shrink-0 md:flex lg:w-48 xl:w-64">
+              <div className="hidden w-44 shrink-0 md:flex lg:w-52 xl:w-64">
                 <SearchField
                   query={searchQuery}
                   label="搜索书签"
+                  inputRef={searchInputRef}
+                  showShortcutHint
                   onChange={onSearchChange}
+                  onKeyDown={onSearchKeyDown}
                 />
               </div>
 
@@ -300,15 +372,13 @@ export function NavHeader({
 
               {/* Right actions */}
               <div className="flex shrink-0 items-center gap-1.5">
-                {/* Admin actions */}
                 {adminMode && (
                   <>
-                    {/* Desktop: show buttons directly */}
                     <button
                       type="button"
                       onClick={onExport}
                       className="hidden sm:flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-accent transition-colors"
-                      title="导出 JSON"
+                      title="导出"
                     >
                       <Download size={13} />
                       <span>导出</span>
@@ -317,7 +387,7 @@ export function NavHeader({
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       className="hidden sm:flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-accent transition-colors"
-                      title="导入 JSON"
+                      title="导入"
                     >
                       <Upload size={13} />
                       <span>导入</span>
@@ -332,7 +402,6 @@ export function NavHeader({
                       <span>新建分组</span>
                     </button>
 
-                    {/* Mobile: dropdown menu */}
                     <div className="relative sm:hidden">
                       <button
                         type="button"
@@ -345,7 +414,6 @@ export function NavHeader({
                       </button>
                       {mobileMenuOpen && (
                         <>
-                          {/* Backdrop to close menu */}
                           <div
                             className="fixed inset-0 z-40"
                             onClick={() => setMobileMenuOpen(false)}
@@ -365,7 +433,7 @@ export function NavHeader({
                               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
                             >
                               <Download size={14} />
-                              <span>导出 JSON</span>
+                              <span>导出</span>
                             </button>
                             <button
                               type="button"
@@ -373,7 +441,15 @@ export function NavHeader({
                               className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
                             >
                               <Upload size={14} />
-                              <span>导入 JSON</span>
+                              <span>导入</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { onOpenBackground(); setMobileMenuOpen(false) }}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
+                            >
+                              <Paintbrush size={14} />
+                              <span>页面背景</span>
                             </button>
                           </div>
                         </>
@@ -391,18 +467,18 @@ export function NavHeader({
                   </>
                 )}
 
-                {/* Background settings */}
                 <button
                   type="button"
                   onClick={onOpenBackground}
-                  className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                  title="背景自定义"
-                  aria-label="背景自定义"
+                  className={`${
+                    adminMode ? 'hidden sm:flex' : 'flex'
+                  } h-8 w-8 items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors`}
+                  title="页面背景"
+                  aria-label="页面背景"
                 >
                   <Paintbrush size={15} />
                 </button>
 
-                {/* Theme switcher */}
                 <button
                   type="button"
                   onClick={() => onThemeChange(nextTheme.key)}
@@ -435,7 +511,6 @@ export function NavHeader({
                   ))}
                 </div>
 
-                {/* Sync indicator */}
                 {showSyncIndicator && (
                   syncError && onRetrySync ? (
                     <button
@@ -475,7 +550,6 @@ export function NavHeader({
                   )
                 )}
 
-                {/* Admin toggle */}
                 <button
                   type="button"
                   onClick={onAdminToggle}
@@ -484,14 +558,13 @@ export function NavHeader({
                       ? 'bg-primary text-primary-foreground border-primary'
                       : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
                   }`}
-                  title={adminMode ? '退出管理模式' : '进入管理模式'}
+                  title={adminMode ? '退出管理' : '管理书签'}
                   aria-label={adminMode ? '退出管理模式' : '进入管理模式'}
                   aria-pressed={adminMode}
                 >
                   <Settings size={15} />
                 </button>
 
-                {/* Logout button */}
                 {onLogout && (
                   <button
                     type="button"

@@ -163,6 +163,23 @@ describe('BookmarkCard note', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 
+  it('toggles open and closed on repeated mobile touch taps', () => {
+    const { onOpen } = renderCard({ ...baseBookmark, note: '手机轻触备注' })
+    const noteButton = screen.getByRole('button', { name: '查看备注' })
+
+    // 1st touch tap -> opens
+    fireEvent.pointerDown(noteButton, { pointerType: 'touch' })
+    fireEvent.focus(noteButton)
+    fireEvent.click(noteButton, { detail: 1 })
+    expect(screen.getByRole('tooltip').textContent).toBe('手机轻触备注')
+
+    // 2nd touch tap -> closes without opening bookmark
+    fireEvent.pointerDown(noteButton, { pointerType: 'touch' })
+    fireEvent.click(noteButton, { detail: 1 })
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
   it('keeps keyboard note activation from opening the bookmark', async () => {
     const user = userEvent.setup()
     const { onOpen } = renderCard({ ...baseBookmark, note: '维护入口' })

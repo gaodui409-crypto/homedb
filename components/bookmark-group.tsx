@@ -12,6 +12,8 @@ interface BookmarkGroupProps {
   adminMode: boolean
   dragEnabled?: boolean
   bookmarkDragEnabled?: boolean
+  forceExpanded?: boolean
+  selectedBookmarkId?: string | null
   onAddBookmark: (groupId: string) => void
   onEditBookmark: (groupId: string, bookmark: Bookmark) => void
   onDeleteBookmark: (groupId: string, bookmarkId: string) => void
@@ -22,7 +24,6 @@ interface BookmarkGroupProps {
   onOpenBookmark: (bookmarkId: string) => void
 }
 
-// Sortable wrapper for the entire group section (for group reorder)
 export function SortableGroup(props: BookmarkGroupProps) {
   const dragEnabled = props.dragEnabled ?? props.adminMode
   const {
@@ -67,6 +68,8 @@ function BookmarkGroup({
   adminMode,
   dragEnabled = adminMode,
   bookmarkDragEnabled,
+  forceExpanded = false,
+  selectedBookmarkId = null,
   onAddBookmark,
   onEditBookmark,
   onDeleteBookmark,
@@ -78,12 +81,11 @@ function BookmarkGroup({
   dragHandleProps,
   isDragging,
 }: InternalGroupProps) {
-  const collapsed = !!group.collapsed
+  const collapsed = !!group.collapsed && !forceExpanded
   const canDragBookmarks = (bookmarkDragEnabled ?? dragEnabled) && !collapsed
   const sortedBookmarks = [...group.bookmarks].sort((a, b) => a.order - b.order)
   const bookmarkIds = sortedBookmarks.map((b) => b.id)
 
-  // Make the expanded group section a droppable zone for cross-group bookmark drops
   const { setNodeRef: setDropRef, isOver } = useDroppable({
     id: `group-drop-${group.id}`,
     disabled: !canDragBookmarks,
@@ -101,7 +103,6 @@ function BookmarkGroup({
     >
       {/* Group Header */}
       <div className="flex items-center gap-2 mb-3 group/header">
-        {/* Drag handle — only in admin mode */}
         {adminMode && dragHandleProps && (
           <div
             className="size-5 flex items-center justify-center text-muted-foreground hover:text-foreground cursor-grab active:cursor-grabbing touch-none flex-shrink-0"
@@ -113,7 +114,6 @@ function BookmarkGroup({
           </div>
         )}
 
-        {/* Collapse toggle: dot + name + chevron */}
         <button
           type="button"
           onClick={() => onToggleCollapse(group.id)}
@@ -135,14 +135,14 @@ function BookmarkGroup({
           )}
           <ChevronDown
             size={14}
-            className={`flex-shrink-0 text-muted-foreground opacity-0 group-hover/collapse:opacity-100 transition-all duration-200 ${
-              collapsed ? '-rotate-90 opacity-60' : ''
+            className={`flex-shrink-0 text-muted-foreground group-hover/collapse:opacity-100 transition-all duration-200 ${
+              collapsed ? '-rotate-90 opacity-60' : 'opacity-0'
             }`}
           />
         </button>
 
         {adminMode && (
-          <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover/header:opacity-100 sm:group-focus-within/header:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 opacity-100 [@media(hover:hover)]:sm:opacity-0 [@media(hover:hover)]:sm:group-hover/header:opacity-100 [@media(hover:hover)]:sm:group-focus-within/header:opacity-100 transition-opacity">
             <button
               type="button"
               onClick={() => onEditGroup(group)}
@@ -169,15 +169,16 @@ function BookmarkGroup({
       <div ref={setDropRef} className={collapsed ? 'hidden' : undefined}>
         <SortableContext items={bookmarkIds} strategy={rectSortingStrategy}>
           {sortedBookmarks.length === 0 && !adminMode && (
-            <p className="text-sm text-muted-foreground py-4 text-center">暂无书签</p>
+            <p className="text-sm text-muted-foreground py-4 text-center">还没有书签</p>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5">
             {sortedBookmarks.map((bm) => (
               <BookmarkCard
                 key={bm.id}
                 bookmark={bm}
                 adminMode={adminMode}
                 dragEnabled={canDragBookmarks}
+                isSearchSelected={selectedBookmarkId === bm.id}
                 onEdit={(b) => onEditBookmark(group.id, b)}
                 onDelete={(id) => onDeleteBookmark(group.id, id)}
                 onTogglePin={(id) => onTogglePin(group.id, id)}
@@ -185,8 +186,7 @@ function BookmarkGroup({
               />
             ))}
 
-            {/* Add Bookmark Button */}
-            {adminMode && (
+            {adminMode && !forceExpanded && (
               <button
                 type="button"
                 onClick={() => onAddBookmark(group.id)}

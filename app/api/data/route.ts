@@ -28,7 +28,7 @@ function dataResponse(
 
 export async function GET(request: NextRequest) {
   if (!isAuthorizationValid(request.headers.get('Authorization'))) {
-    return NextResponse.json({ error: '未授权' }, { status: 401 })
+    return NextResponse.json({ error: '请先登录' }, { status: 401 })
   }
 
   try {
@@ -53,19 +53,19 @@ export async function GET(request: NextRequest) {
     return dataResponse({ groups: recovered.groups }, 'stored', true, 'blob')
   } catch (error) {
     console.error('Error reading from Blob:', error)
-    return NextResponse.json({ error: '云端数据读取失败' }, { status: 503 })
+    return NextResponse.json({ error: '读取云端数据失败' }, { status: 503 })
   }
 }
 
 export async function POST(request: NextRequest) {
   if (!isAuthorizationValid(request.headers.get('Authorization'))) {
-    return NextResponse.json({ error: '未授权' }, { status: 401 })
+    return NextResponse.json({ error: '请先登录' }, { status: 401 })
   }
 
   try {
     const parsed = navDataSchema.safeParse(await request.json())
     if (!parsed.success) {
-      return NextResponse.json({ success: false, error: '数据格式错误' }, { status: 400 })
+      return NextResponse.json({ success: false, error: '数据格式不对' }, { status: 400 })
     }
 
     if (!isBlobConfigured()) {

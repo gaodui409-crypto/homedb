@@ -122,7 +122,7 @@ export function GroupSidebarContent({
   if (items.length === 0) {
     return collapsed ? null : (
       <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-        暂无分组
+        还没有分组
       </p>
     )
   }
@@ -438,7 +438,7 @@ export function MobileGroupDrawer({
               </button>
             </DrawerClose>
             <DrawerDescription className="sr-only">
-              选择分组后将跳转到对应的书签区域。
+              点击分组跳到对应位置
             </DrawerDescription>
           </DrawerHeader>
           <nav

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   SIDEBAR_COLLAPSED_KEY,
+  bookmarkMatchesQuery,
   buildSidebarItems,
   normalizeSearchQuery,
   readSidebarCollapsed,
@@ -18,7 +19,7 @@ const groups: Group[] = [
     color: '#3B82F6',
     order: 0,
     bookmarks: [
-      { id: 'v1', name: 'VPS 01', url: 'https://v1.example.com', order: 0 },
+      { id: 'v1', name: 'VPS 01', url: 'https://v1.example.com', order: 0, note: '东京主力机' },
       { id: 'v2', name: 'VPS 02', url: 'https://v2.example.com', order: 1 },
     ],
   },
@@ -51,7 +52,7 @@ describe('sidebar navigation', () => {
     ])
   })
 
-  it('counts case-insensitive bookmark name and URL matches', () => {
+  it('counts case-insensitive bookmark name, URL, and note matches', () => {
     expect(buildSidebarItems(groups, '02')).toMatchObject([
       { id: 'vps', count: 1, disabled: false },
       { id: 'docs', count: 0, disabled: true },
@@ -60,6 +61,16 @@ describe('sidebar navigation', () => {
       { id: 'vps', count: 1, disabled: false },
       { id: 'docs', count: 0, disabled: true },
     ])
+    expect(buildSidebarItems(groups, '主力机')).toMatchObject([
+      { id: 'vps', count: 1, disabled: false },
+      { id: 'docs', count: 0, disabled: true },
+    ])
+    expect(
+      bookmarkMatchesQuery(
+        { name: 'NAS', url: 'http://10.0.0.2', note: '仅内网 VPN' },
+        'vpn'
+      )
+    ).toBe(true)
   })
 
   it('matches bookmark names case-insensitively', () => {

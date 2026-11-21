@@ -105,7 +105,7 @@ export function useNavStore() {
     setSyncNotice({ message, retryable })
   }, [])
 
-  // Dismisses only the transient toast; persistent syncError remains until a sync succeeds!
+  // Dismisses only the transient toast; persistent syncError remains until a sync succeeds
   const clearSyncError = useCallback(() => {
     setSyncNotice(null)
   }, [])
@@ -228,7 +228,7 @@ export function useNavStore() {
 
       const source = res.headers.get('X-Nav-Data-Source') as CloudDataSource | null
       if (source !== 'stored' && source !== 'missing' && source !== 'disabled') {
-        reportError('云端状态异常', true)
+        reportError('云端响应异常，请重试', true)
         return
       }
 
@@ -246,7 +246,7 @@ export function useNavStore() {
           setSyncError(null)
           setSyncNotice(null)
           if (localStatusRef.current === 'corrupt' && !hasUserMutatedRef.current) {
-            reportError('本地数据异常，已备份原数据', false, false)
+            reportError('本机数据异常，已自动备份', false, false)
           }
         }
         return
@@ -289,11 +289,11 @@ export function useNavStore() {
       } else {
         setPendingSync(getBrowserStorage(), false)
         if (localCorrupt) {
-          reportError('本地数据异常，已备份原数据', false, false)
+          reportError('本机数据异常，已自动备份', false, false)
         }
       }
     } catch {
-      reportError('云端连接失败，暂用本机数据', true)
+      reportError('连不上云端，暂用本机数据', true)
     }
   }, [reportError, syncToCloud])
 
@@ -332,6 +332,53 @@ export function useNavStore() {
   const restoreGroups = useCallback(
     (snapshot: Group[]) => {
       setGroups(snapshot)
+    },
+    [setGroups]
+  )
+
+  const restoreBookmark = useCallback(
+    (groupId: string, bookmark: Bookmark, index: number) => {
+      setGroups((prev) => {
+        const alreadyExists = prev.some((g) =>
+          g.bookmarks.some((b) => b.id === bookmark.id)
+        )
+        if (alreadyExists) return prev
+
+        return prev.map((g) => {
+          if (g.id !== groupId) return g
+          if (g.bookmarks.length >= MAX_BOOKMARKS_PER_GROUP) return g
+          const sorted = sortBookmarksByOrder(g.bookmarks)
+          const safeIndex = Math.max(0, Math.min(index, sorted.length))
+          sorted.splice(safeIndex, 0, bookmark)
+          return { ...g, bookmarks: reindexBookmarks(sorted) }
+        })
+      })
+    },
+    [setGroups]
+  )
+
+  const restoreGroup = useCallback(
+    (group: Group, index: number) => {
+      setGroups((prev) => {
+        if (prev.length >= MAX_GROUPS) return prev
+        if (prev.some((g) => g.id === group.id)) return prev
+
+        const existingBookmarkIds = new Set<string>()
+        for (const g of prev) {
+          for (const b of g.bookmarks) existingBookmarkIds.add(b.id)
+        }
+
+        const safeBookmarks = reindexBookmarks(
+          sortBookmarksByOrder(group.bookmarks).filter(
+            (b) => !existingBookmarkIds.has(b.id)
+          )
+        )
+
+        const sorted = sortGroupsByOrder(prev)
+        const safeIndex = Math.max(0, Math.min(index, sorted.length))
+        sorted.splice(safeIndex, 0, { ...group, bookmarks: safeBookmarks })
+        return reindexGroups(sorted)
+      })
     },
     [setGroups]
   )
@@ -447,7 +494,7 @@ export function useNavStore() {
       if (newGroupId && newGroupId !== groupId) {
         const destGroup = groupsRef.current.find((g) => g.id === newGroupId)
         if (destGroup && destGroup.bookmarks.length >= MAX_BOOKMARKS_PER_GROUP) {
-          reportError(`目标分组书签已满 ${MAX_BOOKMARKS_PER_GROUP} 个`, false, false)
+          reportError(`该分组已满 ${MAX_BOOKMARKS_PER_GROUP} 个书签`, false, false)
           return
         }
       }
@@ -533,7 +580,7 @@ export function useNavStore() {
       if (fromGroupId !== toGroupId) {
         const destGroup = groupsRef.current.find((g) => g.id === toGroupId)
         if (destGroup && destGroup.bookmarks.length >= MAX_BOOKMARKS_PER_GROUP) {
-          reportError(`目标分组书签已满 ${MAX_BOOKMARKS_PER_GROUP} 个`, false, false)
+          reportError(`该分组已满 ${MAX_BOOKMARKS_PER_GROUP} 个书签`, false, false)
           return
         }
       }
@@ -683,6 +730,8 @@ export function useNavStore() {
     retrySyncToCloud,
     setGroups,
     restoreGroups,
+    restoreBookmark,
+    restoreGroup,
     setTheme,
     setTitle,
     setBackground,

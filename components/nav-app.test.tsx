@@ -32,6 +32,7 @@ const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
 
 vi.mock('@/lib/use-nav-store', () => ({
   clearToken: appMocks.clearToken,
+  getToken: () => null,
   useNavStore: appMocks.useNavStore,
 }))
 
@@ -63,12 +64,16 @@ vi.mock('@/components/nav-header', () => ({
           Open navigation
         </button>
         <input
+          ref={props.searchInputRef as Ref<HTMLInputElement>}
           aria-label="测试搜索"
           value={(props.searchQuery as string) ?? ''}
           onChange={(event) =>
             (props.onSearchChange as ((query: string) => void) | undefined)?.(
               event.target.value
             )
+          }
+          onKeyDown={(event) =>
+            (props.onSearchKeyDown as ((e: unknown) => void) | undefined)?.(event)
           }
         />
       </header>
@@ -247,6 +252,8 @@ function createStore(overrides: Partial<Record<string, unknown>> = {}) {
     deleteGroup: vi.fn(),
     reorderGroups: vi.fn(),
     restoreGroups: vi.fn(),
+    restoreBookmark: vi.fn(),
+    restoreGroup: vi.fn(),
     importData: vi.fn(),
     retrySyncToCloud: vi.fn(),
     clearSyncError: vi.fn(),
@@ -529,14 +536,14 @@ describe('NavApp sidebar integration', () => {
 
     fireEvent.change(search, { target: { value: '   ' } })
 
-    expect(screen.queryByText(/未找到匹配/)).toBeNull()
-    expect(screen.getByRole('button', { name: /添加分组/ })).toBeTruthy()
+    expect(screen.queryByText(/没找到/)).toBeNull()
+    expect(screen.getByRole('button', { name: /新建分组/ })).toBeTruthy()
     expect(appMocks.useActiveGroupIds.at(-1)).toEqual(['first', 'later'])
 
     fireEvent.change(search, { target: { value: 'missing' } })
 
-    expect(screen.getByText(/未找到匹配/)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /添加分组/ })).toBeNull()
+    expect(screen.getByText(/没找到/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /新建分组/ })).toBeNull()
     expect(latest<DesktopProps>(appMocks.desktopProps).items.every(
       (item) => item.disabled && item.count === 0
     )).toBe(true)
@@ -551,9 +558,9 @@ describe('NavApp sidebar integration', () => {
       target: { value: '   ' },
     })
 
-    expect(screen.getByText('暂无书签分组')).toBeTruthy()
-    expect(screen.queryByText(/未找到匹配/)).toBeNull()
-    expect(screen.getByRole('button', { name: '创建第一个分组' })).toBeTruthy()
+    expect(screen.getByText('还没有分组')).toBeTruthy()
+    expect(screen.queryByText(/没找到/)).toBeNull()
+    expect(screen.getByRole('button', { name: '新建分组' })).toBeTruthy()
   })
 
   it('shares controlled navigation state, trigger ref, and guarded selection behavior', async () => {
@@ -621,5 +628,75 @@ describe('NavApp sidebar integration', () => {
       behavior: 'auto',
       block: 'start',
     })
+  })
+
+  it('supports slash shortcut focus, note search, arrow selection, Enter launch, and 1-click delete undo', async () => {
+    const user = userEvent.setup()
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const groupsWithNotes: Group[] = [
+      {
+        id: 'g-main',
+        name: '主力',
+        order: 0,
+        color: '#3B82F6',
+        bookmarks: [
+          {
+            id: 'bm-1',
+            name: 'Router',
+            url: 'http://192.168.1.1',
+            order: 0,
+            note: '家里主路由后台',
+          },
+          {
+            id: 'bm-2',
+            name: 'NAS',
+            url: 'http://192.168.1.2',
+            order: 1,
+            note: '家里存储面板',
+          },
+        ],
+      },
+    ]
+    const store = createStore({ groups: groupsWithNotes })
+    appMocks.useNavStore.mockReturnValue(store)
+    vi.stubGlobal('matchMedia', vi.fn((query: string) => ({
+      matches: query === '(min-width: 768px)',
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })))
+
+    render(<NavApp />)
+
+    // '/' focuses search box
+    fireEvent.keyDown(window, { key: '/' })
+    const search = screen.getByRole('textbox', { name: '测试搜索' })
+    expect(document.activeElement).toBe(search)
+
+    // Search by note '家里' matches both bookmarks; ArrowDown moves from bm-1 to bm-2; Enter opens bm-2 and increments click
+    fireEvent.change(search, { target: { value: '家里' } })
+    expect(latest<SortableGroupProps>(appMocks.sortableGroupProps).forceExpanded).toBe(true)
+    expect(latest<SortableGroupProps>(appMocks.sortableGroupProps).selectedBookmarkId).toBe('bm-1')
+
+    fireEvent.keyDown(search, { key: 'ArrowDown' })
+    expect(latest<SortableGroupProps>(appMocks.sortableGroupProps).selectedBookmarkId).toBe('bm-2')
+
+    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(store.recordClick).toHaveBeenCalledWith('bm-2')
+    expect(openSpy).toHaveBeenCalledWith('http://192.168.1.2', '_blank', 'noopener,noreferrer')
+
+    // Delete bookmark shows UndoToast and surgically restores deleted bookmark on click
+    act(() => {
+      latest<SortableGroupProps>(appMocks.sortableGroupProps).onDeleteBookmark('g-main', 'bm-1')
+    })
+    expect(store.deleteBookmark).toHaveBeenCalledWith('g-main', 'bm-1')
+    expect(screen.getByText('已删除「Router」')).toBeTruthy()
+
+    await user.click(screen.getByRole('button', { name: '撤销' }))
+    expect(store.restoreBookmark).toHaveBeenCalledWith(
+      'g-main',
+      groupsWithNotes[0].bookmarks[0],
+      0
+    )
   })
 })
