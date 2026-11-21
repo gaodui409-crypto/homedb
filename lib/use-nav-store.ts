@@ -1,14 +1,32 @@
 'use client'
 
-// Navigation store - updated 2026-03-19
-
 import { useState, useEffect, useCallback, useRef } from 'react'
-
 import { v4 as uuid } from 'uuid'
-
 import type { Group, Bookmark, Theme, NavData, BackgroundSetting } from './types'
-import { DEFAULT_DATA } from './default-data'
-import { importNavDataSchema, navDataSchema, type ImportNavData } from './nav-schema'
+import {
+  MAX_BOOKMARKS_PER_GROUP,
+  MAX_CLICKS,
+  MAX_GROUPS,
+  importNavDataSchema,
+  mergeNavGroups,
+  normalizeImportData,
+  salvageNavData,
+  type ImportNavData,
+} from './nav-schema'
+import {
+  clearToken,
+  getBrowserStorage,
+  getToken,
+  loadBackground,
+  loadStoredGroups,
+  loadTheme,
+  loadTitle,
+  saveBackground,
+  saveGroupsLocal,
+  saveTheme,
+  saveTitle,
+  setToken,
+} from './storage'
 import {
   decideInitialSync,
   hasPendingSync,
@@ -16,188 +34,323 @@ import {
   type CloudDataSource,
 } from './sync-policy'
 
-const STORAGE_KEY = 'mininav_data'
-const THEME_KEY = 'mininav_theme'
-const TITLE_KEY = 'mininav_title'
-const TOKEN_KEY = 'mininav_token'
-const BG_KEY = 'mininav_bg'
+export { getToken, setToken, clearToken }
 
-function loadBackground(): BackgroundSetting {
-  try {
-    const raw = localStorage.getItem(BG_KEY)
-    if (!raw) return { type: 'none' }
-    const parsed = JSON.parse(raw) as BackgroundSetting
-    if (parsed.type === 'color' || parsed.type === 'image' || parsed.type === 'none') {
-      return parsed
-    }
-    return { type: 'none' }
-  } catch {
-    return { type: 'none' }
-  }
+export type SyncMode = 'checking' | 'cloud' | 'local'
+
+export interface SyncNotice {
+  message: string
+  retryable: boolean
 }
 
-function loadGroups(): Group[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return DEFAULT_DATA
-    const parsed = navDataSchema.safeParse(JSON.parse(raw))
-    return parsed.success ? parsed.data.groups : DEFAULT_DATA
-  } catch {
-    return DEFAULT_DATA
-  }
+function sortGroupsByOrder(groups: Group[]): Group[] {
+  return [...groups].sort((a, b) => a.order - b.order)
 }
 
-function saveGroupsLocal(groups: Group[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ groups }))
-  } catch {}
+function sortBookmarksByOrder(bookmarks: Bookmark[]): Bookmark[] {
+  return [...bookmarks].sort((a, b) => a.order - b.order)
 }
 
-function loadTheme(): Theme {
-  return (localStorage.getItem(THEME_KEY) as Theme) ?? 'light'
+function reindexGroups(groups: Group[]): Group[] {
+  return groups.map((group, index) => ({ ...group, order: index }))
 }
 
-function loadTitle(): string {
-  return localStorage.getItem(TITLE_KEY) ?? '我的导航'
-}
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token)
-}
-
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY)
+function reindexBookmarks(bookmarks: Bookmark[]): Bookmark[] {
+  return bookmarks.map((bookmark, index) => ({ ...bookmark, order: index }))
 }
 
 export function useNavStore() {
-  const [groups, setGroupsState] = useState<Group[]>(() => loadGroups())
+  const [initialGroupsState] = useState(() => loadStoredGroups())
+  const [groups, setGroupsState] = useState<Group[]>(initialGroupsState.groups)
   const [theme, setThemeState] = useState<Theme>(() => loadTheme())
   const [title, setTitleState] = useState<string>(() => loadTitle())
   const [background, setBackgroundState] = useState<BackgroundSetting>(() => loadBackground())
   const [adminMode, setAdminMode] = useState(false)
+  const [syncMode, setSyncMode] = useState<SyncMode>('checking')
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
-  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const [syncNotice, setSyncNotice] = useState<SyncNotice | null>(null)
+
+  const groupsRef = useRef<Group[]>(initialGroupsState.groups)
+  const localStatusRef = useRef(initialGroupsState.status)
+  const hasUserMutatedRef = useRef(false)
+  const initialCloudResolvedRef = useRef(false)
+  const syncModeRef = useRef<SyncMode>('checking')
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncVersionRef = useRef(0)
+  const activeSyncCountRef = useRef(0)
   const writeChainRef = useRef<Promise<void>>(Promise.resolve())
-
-  const clearSyncError = useCallback(() => setSyncError(null), [])
-
-  const syncToCloud = useCallback((data: Group[], delay = 500) => {
-    if (syncTimeoutRef.current) {
-      clearTimeout(syncTimeoutRef.current)
-    }
-    const version = ++syncVersionRef.current
-    setPendingSync(localStorage, true)
-
-    syncTimeoutRef.current = setTimeout(() => {
-      syncTimeoutRef.current = null
-      writeChainRef.current = writeChainRef.current.then(async () => {
-        try {
-          setSyncing(true)
-          setSyncError(null)
-          const token = getToken()
-          const res = await fetch('/api/data', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              ...(token ? { Authorization: `Bearer ${token}` } : {}),
-            },
-            body: JSON.stringify({ groups: data }),
-          })
-          const result = await res.json()
-          if (!res.ok || !result.success) {
-            throw new Error(result.error || 'Cloud sync failed')
-          }
-          if (version === syncVersionRef.current) {
-            setPendingSync(localStorage, false)
-          }
-        } catch (err) {
-          console.log('[v0] Cloud sync failed:', err)
-          setSyncError('云端同步失败')
-        } finally {
-          setSyncing(false)
-        }
-      })
-    }, delay)
-  }, [])
+  const unmountedRef = useRef(false)
 
   useEffect(() => {
-    async function loadFromCloud() {
-      try {
-        const token = getToken()
-        const res = await fetch('/api/data', {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-        })
-        if (!res.ok) {
-          throw new Error('Cloud data request failed')
-        }
+    groupsRef.current = groups
+  }, [groups])
 
-        const source = res.headers.get('X-Nav-Data-Source') as CloudDataSource | null
-        if (source !== 'stored' && source !== 'missing' && source !== 'disabled') {
-          setSyncError('云端数据状态无效')
-          return
-        }
-
-        const parsed = navDataSchema.safeParse(await res.json())
-        if (!parsed.success) {
-          throw new Error('Invalid cloud data')
-        }
-
-        const localData = loadGroups()
-        const action = decideInitialSync({
-          source,
-          hasPendingLocal: hasPendingSync(localStorage),
-        })
-
-        if (action === 'upload-local') {
-          syncToCloud(localData, 0)
-        } else if (action === 'use-cloud') {
-          setGroupsState(parsed.data.groups)
-          saveGroupsLocal(parsed.data.groups)
-        } else {
-          setPendingSync(localStorage, false)
-        }
-      } catch {
-        setSyncError('云端数据读取失败，当前使用本地数据')
+  useEffect(() => {
+    unmountedRef.current = false
+    return () => {
+      unmountedRef.current = true
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current)
+        syncTimeoutRef.current = null
       }
     }
-    loadFromCloud()
-  }, [syncToCloud])
-
-  useEffect(() => () => {
-    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current)
   }, [])
 
-  const setGroups = useCallback(
-    (g: Group[] | ((prev: Group[]) => Group[])) => {
-      setGroupsState((prev) => {
-        const next = typeof g === 'function' ? g(prev) : g
-        saveGroupsLocal(next)
-        syncToCloud(next)
-        return next
-      })
+  const reportError = useCallback((message: string, retryable: boolean, markSyncError = true) => {
+    if (unmountedRef.current) return
+    if (markSyncError) {
+      setSyncError(message)
+    }
+    setSyncNotice({ message, retryable })
+  }, [])
+
+  // Dismisses only the transient toast; persistent syncError remains until a sync succeeds!
+  const clearSyncError = useCallback(() => {
+    setSyncNotice(null)
+  }, [])
+
+  const syncToCloud = useCallback(
+    (data: Group[], delay = 500) => {
+      if (syncModeRef.current === 'local') {
+        setPendingSync(getBrowserStorage(), false)
+        return
+      }
+
+      // Never POST before initial cloud handshake completes, preventing DEFAULT_DATA from overwriting Blob
+      if (!initialCloudResolvedRef.current) {
+        setPendingSync(getBrowserStorage(), true)
+        return
+      }
+
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current)
+        syncTimeoutRef.current = null
+      }
+
+      const version = ++syncVersionRef.current
+      setPendingSync(getBrowserStorage(), true)
+
+      syncTimeoutRef.current = setTimeout(() => {
+        syncTimeoutRef.current = null
+        writeChainRef.current = writeChainRef.current.then(async () => {
+          if (syncModeRef.current === 'local' || !initialCloudResolvedRef.current) {
+            return
+          }
+
+          activeSyncCountRef.current += 1
+          if (!unmountedRef.current) {
+            setSyncing(true)
+          }
+
+          try {
+            const token = getToken()
+            const res = await fetch('/api/data', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify({ groups: data }),
+            })
+
+            if (res.status === 401) {
+              clearToken()
+              reportError('登录已过期，请刷新重登', false)
+              return
+            }
+
+            const result = (await res.json()) as {
+              success?: boolean
+              local?: boolean
+              error?: string
+            }
+
+            if (!res.ok || !result.success) {
+              throw new Error(result.error || 'Cloud sync failed')
+            }
+
+            if (result.local) {
+              syncModeRef.current = 'local'
+              setPendingSync(getBrowserStorage(), false)
+              if (!unmountedRef.current) {
+                setSyncMode('local')
+                setSyncError(null)
+                setSyncNotice(null)
+              }
+              return
+            }
+
+            syncModeRef.current = 'cloud'
+            if (!unmountedRef.current) {
+              setSyncMode('cloud')
+              setSyncError(null)
+              setSyncNotice(null)
+            }
+
+            if (version === syncVersionRef.current) {
+              setPendingSync(getBrowserStorage(), false)
+            }
+          } catch {
+            reportError('云端同步失败', true)
+          } finally {
+            activeSyncCountRef.current = Math.max(0, activeSyncCountRef.current - 1)
+            if (
+              !unmountedRef.current &&
+              activeSyncCountRef.current === 0 &&
+              syncTimeoutRef.current === null
+            ) {
+              setSyncing(false)
+            }
+          }
+        })
+      }, delay)
     },
-    [syncToCloud]
+    [reportError]
   )
 
-  const setTheme = useCallback((t: Theme) => {
-    setThemeState(t)
-    localStorage.setItem(THEME_KEY, t)
+  const loadFromCloud = useCallback(async () => {
+    try {
+      const token = getToken()
+      const res = await fetch('/api/data', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+
+      if (res.status === 401) {
+        clearToken()
+        reportError('登录已过期，请刷新重登', false)
+        return
+      }
+
+      if (!res.ok) {
+        throw new Error('Cloud data request failed')
+      }
+
+      const source = res.headers.get('X-Nav-Data-Source') as CloudDataSource | null
+      if (source !== 'stored' && source !== 'missing' && source !== 'disabled') {
+        reportError('云端状态异常', true)
+        return
+      }
+
+      const recovered = salvageNavData(await res.json())
+      if (!recovered) {
+        throw new Error('Invalid cloud data')
+      }
+
+      if (source === 'disabled') {
+        initialCloudResolvedRef.current = true
+        syncModeRef.current = 'local'
+        setPendingSync(getBrowserStorage(), false)
+        if (!unmountedRef.current) {
+          setSyncMode('local')
+          setSyncError(null)
+          setSyncNotice(null)
+          if (localStatusRef.current === 'corrupt' && !hasUserMutatedRef.current) {
+            reportError('本地数据异常，已备份原数据', false, false)
+          }
+        }
+        return
+      }
+
+      initialCloudResolvedRef.current = true
+      syncModeRef.current = 'cloud'
+      if (!unmountedRef.current) {
+        setSyncMode('cloud')
+        setSyncError(null)
+        setSyncNotice(null)
+      }
+
+      const localCorrupt =
+        !hasUserMutatedRef.current && localStatusRef.current === 'corrupt'
+      const hasPendingLocal =
+        hasUserMutatedRef.current ||
+        (!localCorrupt &&
+          localStatusRef.current !== 'missing' &&
+          hasPendingSync(getBrowserStorage()))
+
+      const action = decideInitialSync({
+        source,
+        hasPendingLocal,
+        localCorrupt,
+      })
+
+      if (action === 'upload-local') {
+        syncToCloud(groupsRef.current, 0)
+      } else if (action === 'use-cloud') {
+        localStatusRef.current = 'valid'
+        groupsRef.current = recovered.groups
+        saveGroupsLocal(recovered.groups)
+        setPendingSync(getBrowserStorage(), false)
+        if (!unmountedRef.current) {
+          setGroupsState(recovered.groups)
+          setSyncError(null)
+          setSyncNotice(null)
+        }
+      } else {
+        setPendingSync(getBrowserStorage(), false)
+        if (localCorrupt) {
+          reportError('本地数据异常，已备份原数据', false, false)
+        }
+      }
+    } catch {
+      reportError('云端连接失败，暂用本机数据', true)
+    }
+  }, [reportError, syncToCloud])
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      void loadFromCloud()
+    })
+  }, [loadFromCloud])
+
+  const retrySyncToCloud = useCallback(() => {
+    if (!initialCloudResolvedRef.current) {
+      void loadFromCloud()
+      return
+    }
+    if (syncModeRef.current === 'local') return
+    syncToCloud(groupsRef.current, 0)
+  }, [loadFromCloud, syncToCloud])
+
+  const setGroups = useCallback(
+    (updater: Group[] | ((prev: Group[]) => Group[])) => {
+      const next = typeof updater === 'function' ? updater(groupsRef.current) : updater
+      hasUserMutatedRef.current = true
+      localStatusRef.current = 'valid'
+      groupsRef.current = next
+      setGroupsState(next)
+
+      const savedLocally = saveGroupsLocal(next)
+      if (!savedLocally) {
+        reportError('浏览器存储已满，请先导出备份', false, false)
+      }
+      syncToCloud(next)
+    },
+    [reportError, syncToCloud]
+  )
+
+  const restoreGroups = useCallback(
+    (snapshot: Group[]) => {
+      setGroups(snapshot)
+    },
+    [setGroups]
+  )
+
+  const setTheme = useCallback((nextTheme: Theme) => {
+    setThemeState(nextTheme)
+    saveTheme(nextTheme)
   }, [])
 
-  const setTitle = useCallback((t: string) => {
-    setTitleState(t)
-    localStorage.setItem(TITLE_KEY, t)
+  const setTitle = useCallback((nextTitle: string) => {
+    const trimmed = nextTitle.trim().slice(0, 30)
+    if (!trimmed) return
+    setTitleState(trimmed)
+    saveTitle(trimmed)
   }, [])
 
   const setBackground = useCallback((bg: BackgroundSetting) => {
     setBackgroundState(bg)
-    localStorage.setItem(BG_KEY, JSON.stringify(bg))
+    saveBackground(bg)
   }, [])
 
   useEffect(() => {
@@ -205,58 +358,76 @@ export function useNavStore() {
     html.classList.remove('theme-sepia', 'theme-dark')
     if (theme === 'sepia') html.classList.add('theme-sepia')
     if (theme === 'dark') html.classList.add('theme-dark')
+    html.style.colorScheme = theme === 'dark' ? 'dark' : 'light'
   }, [theme])
 
   const addGroup = useCallback(
     (name: string, color: string) => {
-      setGroups((prev) => [
-        ...prev,
-        { id: uuid(), name, order: prev.length, color, bookmarks: [] },
-      ])
+      const trimmed = name.trim()
+      if (!trimmed) return
+      if (groupsRef.current.length >= MAX_GROUPS) {
+        reportError(`分组最多 ${MAX_GROUPS} 个`, false, false)
+        return
+      }
+      setGroups((prev) =>
+        reindexGroups([
+          ...sortGroupsByOrder(prev),
+          { id: uuid(), name: trimmed, order: prev.length, color, bookmarks: [] },
+        ])
+      )
     },
-    [setGroups]
+    [reportError, setGroups]
   )
 
   const updateGroup = useCallback(
     (id: string, name: string, color: string) => {
-      setGroups((prev) => prev.map((g) => (g.id === id ? { ...g, name, color } : g)))
+      const trimmed = name.trim()
+      if (!trimmed) return
+      setGroups((prev) =>
+        prev.map((g) => (g.id === id ? { ...g, name: trimmed, color } : g))
+      )
     },
     [setGroups]
   )
 
   const deleteGroup = useCallback(
     (id: string) => {
-      setGroups((prev) => prev.filter((g) => g.id !== id))
+      setGroups((prev) => reindexGroups(sortGroupsByOrder(prev).filter((g) => g.id !== id)))
     },
     [setGroups]
   )
 
   const reorderGroups = useCallback(
     (newOrder: Group[]) => {
-      const reordered = newOrder.map((g, i) => ({ ...g, order: i }))
-      setGroups(reordered)
+      setGroups(reindexGroups(newOrder))
     },
     [setGroups]
   )
 
   const addBookmark = useCallback(
     (groupId: string, name: string, url: string, icon?: string, note?: string) => {
+      const targetGroup = groupsRef.current.find((g) => g.id === groupId)
+      if (targetGroup && targetGroup.bookmarks.length >= MAX_BOOKMARKS_PER_GROUP) {
+        reportError(`单组书签最多 ${MAX_BOOKMARKS_PER_GROUP} 个`, false, false)
+        return
+      }
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g
+          const sorted = sortBookmarksByOrder(g.bookmarks)
           const bm: Bookmark = {
             id: uuid(),
-            name,
+            name: name.trim(),
             url,
-            order: g.bookmarks.length,
-            icon: icon || undefined,
+            order: sorted.length,
+            icon: icon?.trim() || undefined,
             note: note?.trim() || undefined,
           }
-          return { ...g, bookmarks: [...g.bookmarks, bm] }
+          return { ...g, bookmarks: reindexBookmarks([...sorted, bm]) }
         })
       )
     },
-    [setGroups]
+    [reportError, setGroups]
   )
 
   const updateBookmark = useCallback(
@@ -269,7 +440,18 @@ export function useNavStore() {
       newGroupId?: string,
       note?: string
     ) => {
+      const trimmedName = name.trim()
+      const iconVal = icon?.trim() || undefined
       const noteVal = note?.trim() || undefined
+
+      if (newGroupId && newGroupId !== groupId) {
+        const destGroup = groupsRef.current.find((g) => g.id === newGroupId)
+        if (destGroup && destGroup.bookmarks.length >= MAX_BOOKMARKS_PER_GROUP) {
+          reportError(`目标分组书签已满 ${MAX_BOOKMARKS_PER_GROUP} 个`, false, false)
+          return
+        }
+      }
+
       setGroups((prev) => {
         if (!newGroupId || newGroupId === groupId) {
           return prev.map((g) => {
@@ -278,32 +460,43 @@ export function useNavStore() {
               ...g,
               bookmarks: g.bookmarks.map((b) =>
                 b.id === bookmarkId
-                  ? { ...b, name, url, icon: icon || undefined, note: noteVal }
+                  ? { ...b, name: trimmedName, url, icon: iconVal, note: noteVal }
                   : b
               ),
             }
           })
         }
+
         let movedBm: Bookmark | null = null
-        const updated = prev.map((g) => {
-          if (g.id === groupId) {
-            const bm = g.bookmarks.find((b) => b.id === bookmarkId)
-            if (bm) movedBm = { ...bm, name, url, icon: icon || undefined, note: noteVal }
-            return { ...g, bookmarks: g.bookmarks.filter((b) => b.id !== bookmarkId) }
+        const removed = prev.map((g) => {
+          if (g.id !== groupId) return g
+          const sorted = sortBookmarksByOrder(g.bookmarks)
+          const bm = sorted.find((b) => b.id === bookmarkId)
+          if (bm) {
+            movedBm = { ...bm, name: trimmedName, url, icon: iconVal, note: noteVal }
           }
-          return g
-        })
-        if (!movedBm) return prev
-        return updated.map((g) => {
-          if (g.id !== newGroupId) return g
           return {
             ...g,
-            bookmarks: [...g.bookmarks, { ...movedBm!, order: g.bookmarks.length }],
+            bookmarks: reindexBookmarks(sorted.filter((b) => b.id !== bookmarkId)),
+          }
+        })
+
+        if (!movedBm) return prev
+
+        return removed.map((g) => {
+          if (g.id !== newGroupId) return g
+          const sorted = sortBookmarksByOrder(g.bookmarks)
+          return {
+            ...g,
+            bookmarks: reindexBookmarks([
+              ...sorted,
+              { ...movedBm!, order: sorted.length },
+            ]),
           }
         })
       })
     },
-    [setGroups]
+    [reportError, setGroups]
   )
 
   const deleteBookmark = useCallback(
@@ -311,7 +504,12 @@ export function useNavStore() {
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g
-          return { ...g, bookmarks: g.bookmarks.filter((b) => b.id !== bookmarkId) }
+          return {
+            ...g,
+            bookmarks: reindexBookmarks(
+              sortBookmarksByOrder(g.bookmarks).filter((b) => b.id !== bookmarkId)
+            ),
+          }
         })
       )
     },
@@ -323,7 +521,7 @@ export function useNavStore() {
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g
-          return { ...g, bookmarks: newOrder.map((b, i) => ({ ...b, order: i })) }
+          return { ...g, bookmarks: reindexBookmarks(newOrder) }
         })
       )
     },
@@ -332,35 +530,76 @@ export function useNavStore() {
 
   const moveBookmark = useCallback(
     (fromGroupId: string, toGroupId: string, bookmarkId: string, toIndex: number) => {
+      if (fromGroupId !== toGroupId) {
+        const destGroup = groupsRef.current.find((g) => g.id === toGroupId)
+        if (destGroup && destGroup.bookmarks.length >= MAX_BOOKMARKS_PER_GROUP) {
+          reportError(`目标分组书签已满 ${MAX_BOOKMARKS_PER_GROUP} 个`, false, false)
+          return
+        }
+      }
+
       setGroups((prev) => {
+        if (fromGroupId === toGroupId) {
+          return prev.map((g) => {
+            if (g.id !== fromGroupId) return g
+            const sorted = sortBookmarksByOrder(g.bookmarks)
+            const currentIndex = sorted.findIndex((b) => b.id === bookmarkId)
+            if (currentIndex === -1) return g
+            const [item] = sorted.splice(currentIndex, 1)
+            const safeIndex = Math.max(0, Math.min(toIndex, sorted.length))
+            sorted.splice(safeIndex, 0, item)
+            return { ...g, bookmarks: reindexBookmarks(sorted) }
+          })
+        }
+
         let movedBm: Bookmark | null = null
         const step1 = prev.map((g) => {
           if (g.id !== fromGroupId) return g
-          movedBm = g.bookmarks.find((b) => b.id === bookmarkId) ?? null
-          return { ...g, bookmarks: g.bookmarks.filter((b) => b.id !== bookmarkId) }
+          const sorted = sortBookmarksByOrder(g.bookmarks)
+          movedBm = sorted.find((b) => b.id === bookmarkId) ?? null
+          return {
+            ...g,
+            bookmarks: reindexBookmarks(sorted.filter((b) => b.id !== bookmarkId)),
+          }
         })
         if (!movedBm) return prev
+
         return step1.map((g) => {
           if (g.id !== toGroupId) return g
-          const sorted = [...g.bookmarks].sort((a, b) => a.order - b.order)
-          sorted.splice(toIndex, 0, movedBm!)
-          return { ...g, bookmarks: sorted.map((b, i) => ({ ...b, order: i })) }
+          const sorted = sortBookmarksByOrder(g.bookmarks)
+          const safeIndex = Math.max(0, Math.min(toIndex, sorted.length))
+          sorted.splice(safeIndex, 0, movedBm!)
+          return { ...g, bookmarks: reindexBookmarks(sorted) }
         })
       })
     },
-    [setGroups]
+    [reportError, setGroups]
   )
 
   const recordClick = useCallback(
     (bookmarkId: string) => {
-      setGroups((prev) =>
-        prev.map((g) => ({
+      const increment = (list: Group[]) =>
+        list.map((g) => ({
           ...g,
           bookmarks: g.bookmarks.map((b) =>
-            b.id === bookmarkId ? { ...b, clicks: (b.clicks ?? 0) + 1 } : b
+            b.id === bookmarkId
+              ? { ...b, clicks: Math.min(MAX_CLICKS, (b.clicks ?? 0) + 1) }
+              : b
           ),
         }))
-      )
+
+      // On uninitialized/corrupt local fallback before cloud resolves, never promote DEFAULT_DATA to pending upload
+      if (
+        !initialCloudResolvedRef.current &&
+        (localStatusRef.current === 'missing' || localStatusRef.current === 'corrupt')
+      ) {
+        const next = increment(groupsRef.current)
+        groupsRef.current = next
+        setGroupsState(next)
+        return
+      }
+
+      setGroups(increment)
     },
     [setGroups]
   )
@@ -392,7 +631,15 @@ export function useNavStore() {
   )
 
   const exportData = useCallback(() => {
-    const data: NavData = { groups }
+    const orderedGroups = sortGroupsByOrder(groupsRef.current).map((g, gIndex) => ({
+      ...g,
+      order: gIndex,
+      bookmarks: sortBookmarksByOrder(g.bookmarks).map((b, bIndex) => ({
+        ...b,
+        order: bIndex,
+      })),
+    }))
+    const data: NavData = { groups: orderedGroups }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
@@ -400,44 +647,6 @@ export function useNavStore() {
     a.download = 'mininav-export.json'
     a.click()
     URL.revokeObjectURL(url)
-  }, [groups])
-
-  const normalizeImportData = useCallback((data: ImportNavData): Group[] => {
-    const defaultColors = [
-      '#3B82F6',
-      '#10B981',
-      '#F59E0B',
-      '#EF4444',
-      '#8B5CF6',
-      '#EC4899',
-      '#06B6D4',
-      '#84CC16',
-    ]
-
-    return data.groups.map((g, gIndex) => {
-      const groupId = g.id || uuid()
-      const groupColor = g.color || defaultColors[gIndex % defaultColors.length]
-
-      const normalizedBookmarks: Bookmark[] = (g.bookmarks ?? []).map((b, bIndex) => ({
-        id: b.id || uuid(),
-        name: b.name,
-        url: b.url,
-        order: typeof b.order === 'number' ? b.order : bIndex,
-        pinned: b.pinned ?? false,
-        icon: b.icon || undefined,
-        note: b.note || undefined,
-        clicks: typeof b.clicks === 'number' ? b.clicks : undefined,
-      }))
-
-      return {
-        id: groupId,
-        name: g.name,
-        order: typeof g.order === 'number' ? g.order : gIndex,
-        color: groupColor,
-        bookmarks: normalizedBookmarks,
-        collapsed: g.collapsed ?? false,
-      }
-    })
   }, [])
 
   const importData = useCallback(
@@ -446,32 +655,18 @@ export function useNavStore() {
       const normalizedGroups = normalizeImportData(parsed)
 
       if (mode === 'overwrite') {
-        setGroups(normalizedGroups)
+        const ordered = reindexGroups(
+          sortGroupsByOrder(normalizedGroups).map((g) => ({
+            ...g,
+            bookmarks: reindexBookmarks(sortBookmarksByOrder(g.bookmarks)),
+          }))
+        )
+        setGroups(ordered)
       } else {
-        setGroups((prev) => {
-          const merged = [...prev]
-          for (const incoming of normalizedGroups) {
-            const existing = merged.find((g) => g.id === incoming.id)
-            if (existing) {
-              const idx = merged.indexOf(existing)
-              merged[idx] = {
-                ...existing,
-                bookmarks: [
-                  ...existing.bookmarks,
-                  ...incoming.bookmarks.filter(
-                    (b) => !existing.bookmarks.find((eb) => eb.id === b.id)
-                  ),
-                ],
-              }
-            } else {
-              merged.push(incoming)
-            }
-          }
-          return merged
-        })
+        setGroups((prev) => mergeNavGroups(prev, normalizedGroups))
       }
     },
-    [normalizeImportData, setGroups]
+    [setGroups]
   )
 
   return {
@@ -480,10 +675,14 @@ export function useNavStore() {
     title,
     background,
     adminMode,
+    syncMode,
     syncing,
     syncError,
+    syncNotice,
     clearSyncError,
-    retrySyncToCloud: () => syncToCloud(groups, 0),
+    retrySyncToCloud,
+    setGroups,
+    restoreGroups,
     setTheme,
     setTitle,
     setBackground,

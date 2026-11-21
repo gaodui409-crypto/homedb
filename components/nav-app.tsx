@@ -54,34 +54,77 @@ type ModalState =
   | { type: 'background' }
 
 type ActiveDrag =
-  | { type: 'bookmark'; bookmark: Bookmark; fromGroupId: string }
+  | { type: 'bookmark'; bookmark: Bookmark; initialGroupId: string }
   | { type: 'group'; group: Group }
   | null
+
+function findGroupContainingBookmark(
+  groups: Group[],
+  bookmarkId: string
+): Group | undefined {
+  return groups.find((group) => group.bookmarks.some((bm) => bm.id === bookmarkId))
+}
+
+function resolveOverGroupId(
+  over: DragOverEvent['over'],
+  groups: Group[],
+  options: { forBookmarkDrop?: boolean; allowCollapsedGroupId?: string } = {}
+): string | undefined {
+  if (!over) return undefined
+  const overType = over.data.current?.type
+  let resolvedId: string | undefined
+
+  if (overType === 'group-drop') {
+    resolvedId = String(over.data.current?.groupId ?? '') || undefined
+  } else if (overType === 'group') {
+    resolvedId = String(over.id)
+  } else if (overType === 'bookmark') {
+    resolvedId = findGroupContainingBookmark(groups, String(over.id))?.id
+  } else {
+    resolvedId = groups.find((group) => group.id === String(over.id))?.id
+  }
+
+  if (!resolvedId) return undefined
+
+  if (options.forBookmarkDrop) {
+    const targetGroup = groups.find((group) => group.id === resolvedId)
+    if (targetGroup?.collapsed && targetGroup.id !== options.allowCollapsedGroupId) {
+      return undefined
+    }
+  }
+
+  return resolvedId
+}
 
 export function NavApp() {
   const store = useNavStore()
   const { adminMode, setAdminMode } = store
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
   const [activeDrag, setActiveDrag] = useState<ActiveDrag>(null)
+  const [dragDraftGroups, setDragDraftGroups] = useState<Group[] | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [navigationOpen, setNavigationOpen] = useState(false)
   const navigationTriggerRef = useRef<HTMLButtonElement>(null)
 
-  const sortedGroups = useMemo(
+  const activeDragRef = useRef<ActiveDrag>(null)
+  const dragDraftGroupsRef = useRef<Group[] | null>(null)
+
+  const sortedStoreGroups = useMemo(
     () => [...store.groups].sort((a, b) => a.order - b.order),
     [store.groups]
   )
+
+  const effectiveGroups = dragDraftGroups ?? sortedStoreGroups
 
   const normalizedSearchQuery = useMemo(
     () => normalizeSearchQuery(searchQuery),
     [searchQuery]
   )
 
-  // Filter groups and bookmarks based on search query
   const filteredGroups = useMemo(() => {
-    if (!normalizedSearchQuery) return sortedGroups
+    if (!normalizedSearchQuery) return effectiveGroups
     const q = normalizedSearchQuery
-    return sortedGroups
+    return effectiveGroups
       .map((group) => ({
         ...group,
         bookmarks: group.bookmarks.filter(
@@ -91,11 +134,11 @@ export function NavApp() {
         ),
       }))
       .filter((group) => group.bookmarks.length > 0)
-  }, [normalizedSearchQuery, sortedGroups])
+  }, [effectiveGroups, normalizedSearchQuery])
 
   const sidebarItems = useMemo(
-    () => buildSidebarItems(sortedGroups, searchQuery),
-    [searchQuery, sortedGroups]
+    () => buildSidebarItems(sortedStoreGroups, searchQuery),
+    [searchQuery, sortedStoreGroups]
   )
 
   const visibleGroupIds = useMemo(
@@ -109,14 +152,12 @@ export function NavApp() {
     stickyAnchorTop,
   } = useActiveGroup(visibleGroupIds)
   const dragEnabled = store.adminMode && normalizedSearchQuery.length === 0
+  const bookmarkDragEnabled = dragEnabled && activeDrag?.type !== 'group'
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 5 } })
   )
-
-  const findGroupByBookmarkId = (bookmarkId: string): Group | undefined =>
-    store.groups.find((g) => g.bookmarks.some((b) => b.id === bookmarkId))
 
   const handleLogout = () => {
     clearToken()
@@ -137,10 +178,9 @@ export function NavApp() {
     })
   }
 
-  // Keyboard shortcut: Ctrl+Shift+A (or Cmd+Shift+A) to toggle admin mode
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toUpperCase() === 'A') {
         e.preventDefault()
         setAdminMode(!adminMode)
       }
@@ -149,17 +189,46 @@ export function NavApp() {
     return () => window.removeEventListener('keydown', handler)
   }, [adminMode, setAdminMode])
 
+  const resetDragState = () => {
+    activeDragRef.current = null
+    dragDraftGroupsRef.current = null
+    setActiveDrag(null)
+    setDragDraftGroups(null)
+  }
+
   const handleDragStart = (event: DragStartEvent) => {
     if (!dragEnabled) return
 
+    const snapshot = sortedStoreGroups.map((group) => ({
+      ...group,
+      bookmarks: [...group.bookmarks].sort((a, b) => a.order - b.order),
+    }))
+
     const data = event.active.data.current
+    const activeId = String(event.active.id)
+
     if (data?.type === 'group') {
-      const group = store.groups.find((g) => g.id === event.active.id)
-      if (group) setActiveDrag({ type: 'group', group })
+      const group = snapshot.find((g) => g.id === activeId)
+      if (group) {
+        const nextDrag: ActiveDrag = { type: 'group', group }
+        activeDragRef.current = nextDrag
+        dragDraftGroupsRef.current = snapshot
+        setActiveDrag(nextDrag)
+        setDragDraftGroups(snapshot)
+      }
     } else if (data?.type === 'bookmark') {
-      const fromGroup = findGroupByBookmarkId(String(event.active.id))
-      if (fromGroup && data.bookmark) {
-        setActiveDrag({ type: 'bookmark', bookmark: data.bookmark, fromGroupId: fromGroup.id })
+      const fromGroup = findGroupContainingBookmark(snapshot, activeId)
+      const bookmark = fromGroup?.bookmarks.find((b) => b.id === activeId) ?? data.bookmark
+      if (fromGroup && bookmark) {
+        const nextDrag: ActiveDrag = {
+          type: 'bookmark',
+          bookmark,
+          initialGroupId: fromGroup.id,
+        }
+        activeDragRef.current = nextDrag
+        dragDraftGroupsRef.current = snapshot
+        setActiveDrag(nextDrag)
+        setDragDraftGroups(snapshot)
       }
     }
   }
@@ -168,71 +237,156 @@ export function NavApp() {
     if (!dragEnabled) return
 
     const { active, over } = event
-    if (!over || !activeDrag || activeDrag.type !== 'bookmark') return
+    const dragState = activeDragRef.current
+    if (!over || !dragState || dragState.type !== 'bookmark') return
 
     const activeId = String(active.id)
     const overId = String(over.id)
 
-    const fromGroup = findGroupByBookmarkId(activeId)
+    const base = dragDraftGroupsRef.current ?? sortedStoreGroups
+    const fromGroup = findGroupContainingBookmark(base, activeId)
     if (!fromGroup) return
 
-    let toGroupId: string | undefined
-
-    if (over.data.current?.type === 'group-drop') {
-      toGroupId = over.data.current.groupId
-    } else if (over.data.current?.type === 'bookmark') {
-      toGroupId = findGroupByBookmarkId(overId)?.id
-    } else if (over.data.current?.type === 'group') {
-      toGroupId = overId
-    }
-
+    const toGroupId = resolveOverGroupId(over, base, {
+      forBookmarkDrop: true,
+      allowCollapsedGroupId: dragState.initialGroupId,
+    })
     if (!toGroupId || toGroupId === fromGroup.id) return
 
-    const targetGroup = store.groups.find((g) => g.id === toGroupId)
-    if (!targetGroup) return
-    const toIndex = targetGroup.bookmarks.length
-    store.moveBookmark(fromGroup.id, toGroupId, activeId, toIndex)
+    const targetGroup = base.find((g) => g.id === toGroupId)
+    if (!targetGroup || targetGroup.collapsed) return
 
-    setActiveDrag((prev) =>
-      prev?.type === 'bookmark' ? { ...prev, fromGroupId: toGroupId! } : prev
-    )
+    const movedBm = fromGroup.bookmarks.find((b) => b.id === activeId)
+    if (!movedBm) return
+
+    const sortedTarget = [...targetGroup.bookmarks].sort((a, b) => a.order - b.order)
+    let insertIndex = sortedTarget.length
+    if (over.data.current?.type === 'bookmark') {
+      const overIndex = sortedTarget.findIndex((b) => b.id === overId)
+      if (overIndex !== -1) insertIndex = overIndex
+    }
+
+    const nextDraft = base.map((g) => {
+      if (g.id === fromGroup.id) {
+        const remaining = [...g.bookmarks]
+          .sort((a, b) => a.order - b.order)
+          .filter((b) => b.id !== activeId)
+          .map((b, i) => ({ ...b, order: i }))
+        return { ...g, bookmarks: remaining }
+      }
+      if (g.id === toGroupId) {
+        const next = [...sortedTarget]
+        next.splice(insertIndex, 0, movedBm)
+        return { ...g, bookmarks: next.map((b, i) => ({ ...b, order: i })) }
+      }
+      return g
+    })
+
+    dragDraftGroupsRef.current = nextDraft
+    setDragDraftGroups(nextDraft)
   }
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event
-    setActiveDrag(null)
+    const dragState = activeDragRef.current
+    const draft = dragDraftGroupsRef.current
+    resetDragState()
 
-    if (!dragEnabled) return
-    if (!over || active.id === over.id) return
+    if (!dragEnabled || !over || !dragState) return
 
     const activeId = String(active.id)
     const overId = String(over.id)
 
-    if (active.data.current?.type === 'group') {
-      const oldIndex = sortedGroups.findIndex((g) => g.id === activeId)
-      const newIndex = sortedGroups.findIndex((g) => g.id === overId)
-      if (oldIndex !== -1 && newIndex !== -1) {
-        store.reorderGroups(arrayMove(sortedGroups, oldIndex, newIndex))
+    if (dragState.type === 'group') {
+      const overGroupId = resolveOverGroupId(over, sortedStoreGroups)
+      if (!overGroupId || overGroupId === activeId) return
+
+      const oldIndex = sortedStoreGroups.findIndex((g) => g.id === activeId)
+      const newIndex = sortedStoreGroups.findIndex((g) => g.id === overGroupId)
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        store.reorderGroups(arrayMove(sortedStoreGroups, oldIndex, newIndex))
       }
       return
     }
 
-    if (active.data.current?.type === 'bookmark') {
-      const group = findGroupByBookmarkId(activeId)
-      if (!group) return
-      const overGroup = findGroupByBookmarkId(overId)
-      if (!overGroup || overGroup.id !== group.id) return
+    if (dragState.type === 'bookmark') {
+      const workingGroups = draft ?? sortedStoreGroups
+      const currentGroup = findGroupContainingBookmark(workingGroups, activeId)
+      if (!currentGroup) return
 
-      const sortedBms = [...group.bookmarks].sort((a, b) => a.order - b.order)
-      const oldIndex = sortedBms.findIndex((b) => b.id === activeId)
-      const newIndex = sortedBms.findIndex((b) => b.id === overId)
-      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-        store.reorderBookmarks(group.id, arrayMove(sortedBms, oldIndex, newIndex))
+      const overGroupId =
+        resolveOverGroupId(over, workingGroups, {
+          forBookmarkDrop: true,
+          allowCollapsedGroupId: dragState.initialGroupId,
+        }) ?? currentGroup.id
+
+      const targetGroup = workingGroups.find((g) => g.id === overGroupId)
+      if (!targetGroup || (targetGroup.collapsed && overGroupId !== dragState.initialGroupId)) {
+        return
+      }
+
+      const sortedTarget = [...targetGroup.bookmarks].sort((a, b) => a.order - b.order)
+
+      if (currentGroup.id === overGroupId) {
+        const currentIndex = sortedTarget.findIndex((b) => b.id === activeId)
+        if (currentIndex === -1) return
+
+        let finalBookmarks = sortedTarget
+        if (over.data.current?.type === 'bookmark' && overId !== activeId) {
+          const candidateIndex = sortedTarget.findIndex((b) => b.id === overId)
+          if (candidateIndex !== -1 && candidateIndex !== currentIndex) {
+            finalBookmarks = arrayMove(sortedTarget, currentIndex, candidateIndex)
+          }
+        }
+
+        if (overGroupId === dragState.initialGroupId) {
+          const initialGroup = sortedStoreGroups.find((g) => g.id === dragState.initialGroupId)
+          const originalIds = [...(initialGroup?.bookmarks ?? [])]
+            .sort((a, b) => a.order - b.order)
+            .map((b) => b.id)
+          const nextIds = finalBookmarks.map((b) => b.id)
+          const changed =
+            originalIds.length !== nextIds.length ||
+            originalIds.some((id, idx) => id !== nextIds[idx])
+
+          if (changed) {
+            store.reorderBookmarks(overGroupId, finalBookmarks)
+          }
+        } else {
+          const finalIndex = finalBookmarks.findIndex((b) => b.id === activeId)
+          store.moveBookmark(
+            dragState.initialGroupId,
+            overGroupId,
+            activeId,
+            finalIndex >= 0 ? finalIndex : sortedTarget.length
+          )
+        }
+      } else {
+        let targetIndex = sortedTarget.length
+        if (over.data.current?.type === 'bookmark') {
+          const overIndex = sortedTarget.findIndex((b) => b.id === overId)
+          if (overIndex !== -1) targetIndex = overIndex
+        }
+        store.moveBookmark(dragState.initialGroupId, overGroupId, activeId, targetIndex)
       }
     }
   }
 
   const bg = store.background
+  const footerSyncLabel =
+    store.syncMode === 'local'
+      ? '仅存本机'
+      : store.syncing
+        ? '同步中'
+        : store.syncError
+          ? '同步失败'
+          : store.syncMode === 'checking'
+            ? '连接云端中'
+            : '已同步'
+
+  const activeNotice =
+    store.syncNotice ??
+    (store.syncError ? { message: store.syncError, retryable: store.syncMode !== 'local' } : null)
 
   return (
     <div
@@ -248,7 +402,7 @@ export function NavApp() {
             className="fixed inset-0 z-0 bg-cover bg-center bg-no-repeat"
             style={
               bg.type === 'image'
-                ? { backgroundImage: `url(${bg.value})` }
+                ? { backgroundImage: `url(${JSON.stringify(bg.value)})` }
                 : { backgroundColor: bg.value }
             }
             aria-hidden="true"
@@ -260,248 +414,257 @@ export function NavApp() {
         </>
       )}
       <div className="relative z-10">
-      <NavHeader
-        title={store.title}
-        theme={store.theme}
-        adminMode={store.adminMode}
-        syncing={store.syncing}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        onThemeChange={store.setTheme}
-        onTitleChange={store.setTitle}
-        onAdminToggle={() => store.setAdminMode(!store.adminMode)}
-        onAddGroup={() => setModal({ type: 'addGroup' })}
-        onExport={store.exportData}
-        onImportFile={(data, fileName) =>
-          setModal({ type: 'importMode', data, fileName })
-        }
-        onLogout={handleLogout}
-        onOpenBackground={() => setModal({ type: 'background' })}
-        navigationOpen={navigationOpen}
-        onNavigationOpenChange={setNavigationOpen}
-        navigationTriggerRef={navigationTriggerRef}
-      />
+        <NavHeader
+          title={store.title}
+          theme={store.theme}
+          adminMode={store.adminMode}
+          syncMode={store.syncMode}
+          syncing={store.syncing}
+          syncError={store.syncError}
+          onRetrySync={store.retrySyncToCloud}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          onThemeChange={store.setTheme}
+          onTitleChange={store.setTitle}
+          onAdminToggle={() => store.setAdminMode(!store.adminMode)}
+          onAddGroup={() => setModal({ type: 'addGroup' })}
+          onExport={store.exportData}
+          onImportFile={(data, fileName) =>
+            setModal({ type: 'importMode', data, fileName })
+          }
+          onLogout={handleLogout}
+          onOpenBackground={() => setModal({ type: 'background' })}
+          navigationOpen={navigationOpen}
+          onNavigationOpenChange={setNavigationOpen}
+          navigationTriggerRef={navigationTriggerRef}
+        />
 
-      <MobileGroupDrawer
-        items={sidebarItems}
-        activeGroupId={activeGroupId}
-        open={navigationOpen}
-        onOpenChange={setNavigationOpen}
-        onSelect={handleGroupSelect}
-        triggerRef={navigationTriggerRef}
-      />
-
-      <div className="flex items-start">
-        <DesktopGroupSidebar
+        <MobileGroupDrawer
           items={sidebarItems}
           activeGroupId={activeGroupId}
+          open={navigationOpen}
+          onOpenChange={setNavigationOpen}
           onSelect={handleGroupSelect}
+          triggerRef={navigationTriggerRef}
         />
 
-        <div className="min-w-0 flex-1">
-          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {store.adminMode && (
-          <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary/10 border border-primary/20 text-primary text-sm font-medium">
-            <span className="size-2 rounded-full bg-primary inline-block" />
-            管理模式 — 点击卡片打开，使用铅笔编辑，拖拽排序，点击图钉标记重点
-          </div>
-        )}
+        <div className="flex items-start">
+          <DesktopGroupSidebar
+            items={sidebarItems}
+            activeGroupId={activeGroupId}
+            onSelect={handleGroupSelect}
+          />
 
-        {filteredGroups.length === 0 && !normalizedSearchQuery ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
-            <p className="text-muted-foreground text-base">暂无书签分组</p>
-            {store.adminMode && (
-              <button
-                onClick={() => setModal({ type: 'addGroup' })}
-                className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity"
-              >
-                创建第一个分组
-              </button>
-            )}
-          </div>
-        ) : filteredGroups.length === 0 && normalizedSearchQuery ? (
-          <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
-            <p className="text-muted-foreground text-base">
-              未找到匹配「{searchQuery}」的书签
-            </p>
-            <button
-              onClick={() => setSearchQuery('')}
-              className="px-4 py-2 rounded-lg bg-accent text-foreground text-sm font-medium hover:bg-accent/80 transition-colors"
-            >
-              清除搜索
-            </button>
-          </div>
-        ) : (
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCorners}
-            onDragStart={handleDragStart}
-            onDragOver={handleDragOver}
-            onDragEnd={handleDragEnd}
-          >
-            <SortableContext items={visibleGroupIds} strategy={verticalListSortingStrategy}>
-              <div className="flex flex-col gap-8">
-                {filteredGroups.map((group) => (
-                  <SortableGroup
-                    key={group.id}
-                    group={group}
-                    adminMode={store.adminMode}
-                    dragEnabled={dragEnabled}
-                    onAddBookmark={(gId) => setModal({ type: 'addBookmark', groupId: gId })}
-                    onEditBookmark={(gId, bm) =>
-                      setModal({ type: 'editBookmark', groupId: gId, bookmark: bm })
-                    }
-                    onDeleteBookmark={(gId, bId) => {
-                      const bm = group.bookmarks.find((b) => b.id === bId)
-                      setModal({
-                        type: 'deleteBookmark',
-                        groupId: gId,
-                        bookmarkId: bId,
-                        name: bm?.name ?? '',
-                      })
-                    }}
-                    onTogglePin={(gId, bId) => store.togglePinBookmark(gId, bId)}
-                    onEditGroup={(g) => setModal({ type: 'editGroup', group: g })}
-                    onDeleteGroup={(gId) =>
-                      setModal({ type: 'deleteGroup', groupId: gId, name: group.name })
-                    }
-                    onToggleCollapse={store.toggleGroupCollapsed}
-                    onOpenBookmark={store.recordClick}
-                  />
-                ))}
+          <div className="min-w-0 flex-1">
+            <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+              {store.adminMode && (
+                <div className="mb-6 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-primary/10 border border-primary/20 text-primary text-sm font-medium">
+                  <span className="size-2 rounded-full bg-primary inline-block" />
+                  管理模式：点卡片照常打开，可拖拽、编辑或标重点
+                </div>
+              )}
 
-                {store.adminMode && !normalizedSearchQuery && (
+              {filteredGroups.length === 0 && !normalizedSearchQuery ? (
+                <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
+                  <p className="text-muted-foreground text-base">暂无书签分组</p>
+                  {store.adminMode && (
+                    <button
+                      type="button"
+                      onClick={() => setModal({ type: 'addGroup' })}
+                      className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity"
+                    >
+                      创建第一个分组
+                    </button>
+                  )}
+                </div>
+              ) : filteredGroups.length === 0 && normalizedSearchQuery ? (
+                <div className="flex flex-col items-center justify-center py-24 text-center gap-3">
+                  <p className="text-muted-foreground text-base">
+                    未找到匹配「{searchQuery}」的书签
+                  </p>
                   <button
-                    onClick={() => setModal({ type: 'addGroup' })}
-                    className="w-full rounded-2xl border-2 border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary transition-colors py-5 text-sm flex items-center justify-center gap-2"
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="px-4 py-2 rounded-lg bg-accent text-foreground text-sm font-medium hover:bg-accent/80 transition-colors"
                   >
-                    <span className="text-lg font-light leading-none">+</span>
-                    <span>添加分组</span>
+                    清除搜索
                   </button>
-                )}
-              </div>
-            </SortableContext>
-
-            <DragOverlay dropAnimation={{ duration: 200, easing: 'ease' }}>
-              {activeDrag?.type === 'bookmark' && (
-                <div className="rotate-2 scale-105 opacity-90">
-                  <BookmarkCard
-                    bookmark={activeDrag.bookmark}
-                    adminMode={false}
-                    onEdit={() => {}}
-                    onDelete={() => {}}
-                  />
                 </div>
-              )}
-              {activeDrag?.type === 'group' && (
-                <div className="rounded-2xl bg-card border border-primary/30 shadow-xl px-4 py-3 opacity-90">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="size-2.5 rounded-full"
-                      style={{ backgroundColor: activeDrag.group.color }}
-                    />
-                    <span className="text-sm font-semibold text-foreground">
-                      {activeDrag.group.name}
-                    </span>
-                    <span className="text-xs text-muted-foreground ml-1">
-                      ({activeDrag.group.bookmarks.length} 个书签)
-                    </span>
-                  </div>
-                </div>
-              )}
-            </DragOverlay>
-          </DndContext>
-        )}
-          </main>
+              ) : (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCorners}
+                  onDragStart={handleDragStart}
+                  onDragOver={handleDragOver}
+                  onDragEnd={handleDragEnd}
+                  onDragCancel={resetDragState}
+                >
+                  <SortableContext items={visibleGroupIds} strategy={verticalListSortingStrategy}>
+                    <div className="flex flex-col gap-8">
+                      {filteredGroups.map((group) => (
+                        <SortableGroup
+                          key={group.id}
+                          group={group}
+                          adminMode={store.adminMode}
+                          dragEnabled={dragEnabled}
+                          bookmarkDragEnabled={bookmarkDragEnabled}
+                          onAddBookmark={(gId) => setModal({ type: 'addBookmark', groupId: gId })}
+                          onEditBookmark={(gId, bm) =>
+                            setModal({ type: 'editBookmark', groupId: gId, bookmark: bm })
+                          }
+                          onDeleteBookmark={(gId, bId) => {
+                            const bm = group.bookmarks.find((b) => b.id === bId)
+                            setModal({
+                              type: 'deleteBookmark',
+                              groupId: gId,
+                              bookmarkId: bId,
+                              name: bm?.name ?? '',
+                            })
+                          }}
+                          onTogglePin={(gId, bId) => store.togglePinBookmark(gId, bId)}
+                          onEditGroup={(g) => setModal({ type: 'editGroup', group: g })}
+                          onDeleteGroup={(gId) =>
+                            setModal({ type: 'deleteGroup', groupId: gId, name: group.name })
+                          }
+                          onToggleCollapse={store.toggleGroupCollapsed}
+                          onOpenBookmark={store.recordClick}
+                        />
+                      ))}
 
-          <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center">
-            <p className="text-xs text-muted-foreground">
-              MiniNav v0.4 · 数据{store.syncing ? '同步中' : store.syncError ? '同步失败' : '已同步'} · <a href="https://github.com/gaodui409-crypto/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
-            </p>
-          </footer>
+                      {store.adminMode && !normalizedSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setModal({ type: 'addGroup' })}
+                          className="w-full rounded-2xl border-2 border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary transition-colors py-5 text-sm flex items-center justify-center gap-2"
+                        >
+                          <span className="text-lg font-light leading-none">+</span>
+                          <span>添加分组</span>
+                        </button>
+                      )}
+                    </div>
+                  </SortableContext>
+
+                  <DragOverlay dropAnimation={{ duration: 200, easing: 'ease' }}>
+                    {activeDrag?.type === 'bookmark' && (
+                      <div className="rotate-2 scale-105 opacity-90">
+                        <BookmarkCard
+                          bookmark={activeDrag.bookmark}
+                          adminMode={false}
+                          onEdit={() => {}}
+                          onDelete={() => {}}
+                        />
+                      </div>
+                    )}
+                    {activeDrag?.type === 'group' && (
+                      <div className="rounded-2xl bg-card border border-primary/30 shadow-xl px-4 py-3 opacity-90">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="size-2.5 rounded-full"
+                            style={{ backgroundColor: activeDrag.group.color }}
+                          />
+                          <span className="text-sm font-semibold text-foreground">
+                            {activeDrag.group.name}
+                          </span>
+                          <span className="text-xs text-muted-foreground ml-1">
+                            ({activeDrag.group.bookmarks.length} 个书签)
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </DragOverlay>
+                </DndContext>
+              )}
+            </main>
+
+            <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center">
+              <p className="text-xs text-muted-foreground">
+                MiniNav v0.4 · {footerSyncLabel} · <a href="https://github.com/gaodui409-crypto/homedb" target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">GitHub</a>
+              </p>
+            </footer>
+          </div>
         </div>
-      </div>
 
-      {/* Modals */}
-      {(modal.type === 'addBookmark' || modal.type === 'editBookmark') && (
-        <BookmarkModal
-          state={
-            modal.type === 'editBookmark'
-              ? { groupId: modal.groupId, bookmark: modal.bookmark }
-              : { groupId: modal.groupId }
-          }
-          groups={store.groups}
-          onSave={(sourceGroupId, name, url, icon, newGroupId, note) => {
-            if (modal.type === 'editBookmark') {
-              store.updateBookmark(
-                sourceGroupId,
-                modal.bookmark.id,
-                name,
-                url,
-                icon,
-                newGroupId !== sourceGroupId ? newGroupId : undefined,
-                note
-              )
-            } else {
-              store.addBookmark(newGroupId, name, url, icon, note)
+        {/* Modals */}
+        {(modal.type === 'addBookmark' || modal.type === 'editBookmark') && (
+          <BookmarkModal
+            state={
+              modal.type === 'editBookmark'
+                ? { groupId: modal.groupId, bookmark: modal.bookmark }
+                : { groupId: modal.groupId }
             }
-          }}
-          onClose={() => setModal({ type: 'none' })}
-        />
-      )}
+            groups={store.groups}
+            onSave={(sourceGroupId, name, url, icon, newGroupId, note) => {
+              if (modal.type === 'editBookmark') {
+                store.updateBookmark(
+                  sourceGroupId,
+                  modal.bookmark.id,
+                  name,
+                  url,
+                  icon,
+                  newGroupId !== sourceGroupId ? newGroupId : undefined,
+                  note
+                )
+              } else {
+                store.addBookmark(newGroupId, name, url, icon, note)
+              }
+            }}
+            onClose={() => setModal({ type: 'none' })}
+          />
+        )}
 
-      {(modal.type === 'addGroup' || modal.type === 'editGroup') && (
-        <GroupModal
-          state={modal.type === 'editGroup' ? { group: modal.group } : {}}
-          onSave={(name, color) => {
-            if (modal.type === 'editGroup') {
-              store.updateGroup(modal.group.id, name, color)
-            } else {
-              store.addGroup(name, color)
-            }
-          }}
-          onClose={() => setModal({ type: 'none' })}
-        />
-      )}
+        {(modal.type === 'addGroup' || modal.type === 'editGroup') && (
+          <GroupModal
+            state={modal.type === 'editGroup' ? { group: modal.group } : {}}
+            onSave={(name, color) => {
+              if (modal.type === 'editGroup') {
+                store.updateGroup(modal.group.id, name, color)
+              } else {
+                store.addGroup(name, color)
+              }
+            }}
+            onClose={() => setModal({ type: 'none' })}
+          />
+        )}
 
-      {modal.type === 'deleteBookmark' && (
-        <ConfirmDeleteModal
-          message={`确定要删除书签「${modal.name}」吗？此操作不可撤销。`}
-          onConfirm={() => store.deleteBookmark(modal.groupId, modal.bookmarkId)}
-          onClose={() => setModal({ type: 'none' })}
-        />
-      )}
+        {modal.type === 'deleteBookmark' && (
+          <ConfirmDeleteModal
+            message={`确定要删除书签「${modal.name}」吗？此操作不可撤销。`}
+            onConfirm={() => store.deleteBookmark(modal.groupId, modal.bookmarkId)}
+            onClose={() => setModal({ type: 'none' })}
+          />
+        )}
 
-      {modal.type === 'deleteGroup' && (
-        <ConfirmDeleteModal
-          message={`确定要删除分组「${modal.name}」及其全部书签吗？此操作不可撤销。`}
-          onConfirm={() => store.deleteGroup(modal.groupId)}
-          onClose={() => setModal({ type: 'none' })}
-        />
-      )}
+        {modal.type === 'deleteGroup' && (
+          <ConfirmDeleteModal
+            message={`确定要删除分组「${modal.name}」及其全部书签吗？此操作不可撤销。`}
+            onConfirm={() => store.deleteGroup(modal.groupId)}
+            onClose={() => setModal({ type: 'none' })}
+          />
+        )}
 
-      {modal.type === 'importMode' && (
-        <ImportModeModal
-          fileName={modal.fileName}
-          onImport={(mode) => store.importData(modal.data, mode)}
-          onClose={() => setModal({ type: 'none' })}
-        />
-      )}
+        {modal.type === 'importMode' && (
+          <ImportModeModal
+            fileName={modal.fileName}
+            onImport={(mode) => store.importData(modal.data, mode)}
+            onClose={() => setModal({ type: 'none' })}
+          />
+        )}
 
-      {modal.type === 'background' && (
-        <BackgroundModal
-          current={store.background}
-          onSave={store.setBackground}
-          onClose={() => setModal({ type: 'none' })}
-        />
-      )}
+        {modal.type === 'background' && (
+          <BackgroundModal
+            current={store.background}
+            onSave={store.setBackground}
+            onClose={() => setModal({ type: 'none' })}
+          />
+        )}
 
-      {/* Sync Error Toast */}
-      <SyncErrorToast
-        error={store.syncError}
-        onRetry={store.retrySyncToCloud}
-        onDismiss={store.clearSyncError}
-      />
+        {/* Sync Error Toast */}
+        <SyncErrorToast
+          error={store.syncNotice?.message ?? null}
+          showRetry={activeNotice?.retryable ?? false}
+          onRetry={store.retrySyncToCloud}
+          onDismiss={store.clearSyncError}
+        />
       </div>
     </div>
   )
@@ -509,10 +672,12 @@ export function NavApp() {
 
 function SyncErrorToast({
   error,
+  showRetry = true,
   onRetry,
   onDismiss,
 }: {
   error: string | null
+  showRetry?: boolean
   onRetry: () => void
   onDismiss: () => void
 }) {
@@ -529,14 +694,18 @@ function SyncErrorToast({
       <div className="flex items-center gap-3 px-4 py-3 rounded-xl bg-destructive text-destructive-foreground shadow-lg">
         <AlertTriangle size={18} />
         <span className="text-sm font-medium">{error}</span>
+        {showRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="flex items-center gap-1 px-2 py-1 rounded-md bg-destructive-foreground/20 hover:bg-destructive-foreground/30 transition-colors text-xs font-medium"
+          >
+            <RefreshCw size={12} />
+            重试
+          </button>
+        )}
         <button
-          onClick={onRetry}
-          className="flex items-center gap-1 px-2 py-1 rounded-md bg-destructive-foreground/20 hover:bg-destructive-foreground/30 transition-colors text-xs font-medium"
-        >
-          <RefreshCw size={12} />
-          重试
-        </button>
-        <button
+          type="button"
           onClick={onDismiss}
           className="p-1 rounded-md hover:bg-destructive-foreground/20 transition-colors"
           aria-label="关闭"

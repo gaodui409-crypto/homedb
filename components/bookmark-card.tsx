@@ -62,12 +62,12 @@ export function BookmarkCard({
       style={style}
       {...(dragEnabled ? { ...attributes, ...listeners } : {})}
       className={`nav-card group relative flex items-center gap-3 rounded-xl bg-card p-3 select-none transition-all duration-200 cursor-pointer ${isDragging ? 'ring-2 ring-primary/40' : ''}`}
-      {...(adminMode ? { ...attributes, ...listeners } : {})}
       onClick={handleClick}
       role="link"
       tabIndex={0}
       aria-label={`打开 ${bookmark.name}`}
       onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           handleClick()
@@ -117,15 +117,17 @@ export function BookmarkCard({
         </p>
       </div>
 
-      {/* Admin Actions - mobile: always visible; desktop: hover to show */}
+      {/* Admin Actions - mobile: always visible; desktop: hover or focus to show */}
       {adminMode && (
         <div
-          className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+          className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity"
           onClick={(e) => e.stopPropagation()}
           onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
         >
           {onTogglePin && (
             <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); onTogglePin(bookmark.id) }}
               className="size-6 flex items-center justify-center rounded-md text-muted-foreground hover:text-amber-500 hover:bg-amber-500/10 transition-colors"
               aria-label={bookmark.pinned ? '取消重点' : '标记重点'}
@@ -135,6 +137,7 @@ export function BookmarkCard({
             </button>
           )}
           <button
+            type="button"
             onClick={(e) => { e.stopPropagation(); onEdit(bookmark) }}
             className="size-6 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
             aria-label="编辑书签"
@@ -143,6 +146,7 @@ export function BookmarkCard({
             <Pencil size={12} />
           </button>
           <button
+            type="button"
             onClick={(e) => { e.stopPropagation(); onDelete(bookmark.id) }}
             className="size-6 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
             aria-label="删除书签"

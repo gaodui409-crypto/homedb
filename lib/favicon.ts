@@ -1,4 +1,4 @@
-// Shared favicon + avatar helpers (deduplicated from card / quick-bar / modals)
+// Shared favicon, domain, and letter-avatar helpers
 
 /** Hosts that never have a public favicon: IPv4/IPv6 addresses, localhost, single-word intranet names */
 export function isUnresolvableHost(url: string): boolean {
@@ -27,10 +27,6 @@ export function getFaviconSources(url: string): string[] {
   } catch {
     return []
   }
-}
-
-export function getFaviconUrl(url: string): string {
-  return getFaviconSources(url)[0] ?? ''
 }
 
 export function getDomain(url: string): string {

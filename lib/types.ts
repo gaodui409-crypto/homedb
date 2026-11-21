@@ -5,10 +5,10 @@ export interface Bookmark {
   name: string
   url: string
   order: number
-  pinned?: boolean // pinned to the quick-access bar
-  icon?: string // custom icon URL (optional)
+  pinned?: boolean // highlight marker only; never alters manual order
+  icon?: string // custom icon URL or builtin:* marker (optional)
   note?: string // user note / annotation (optional)
-  clicks?: number // click counter for "most visited"
+  clicks?: number // open counter; >= 3 shows flame badge, never alters manual order
 }
 
 export interface Group {

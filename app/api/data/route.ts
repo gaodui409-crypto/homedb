@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { get, put } from '@vercel/blob'
 import { isAuthorizationValid } from '@/lib/auth-token'
 import { DEFAULT_DATA } from '@/lib/default-data'
-import { navDataSchema } from '@/lib/nav-schema'
+import { navDataSchema, salvageNavData } from '@/lib/nav-schema'
 import type { NavData } from '@/lib/types'
 
 const BLOB_KEY = 'nav-data.json'
@@ -46,8 +46,11 @@ export async function GET(request: NextRequest) {
     }
 
     const response = new Response(result.stream)
-    const data = navDataSchema.parse(JSON.parse(await response.text()))
-    return dataResponse(data, 'stored', true, 'blob')
+    const recovered = salvageNavData(JSON.parse(await response.text()))
+    if (!recovered) {
+      throw new Error('Stored Blob payload is unrecoverable')
+    }
+    return dataResponse({ groups: recovered.groups }, 'stored', true, 'blob')
   } catch (error) {
     console.error('Error reading from Blob:', error)
     return NextResponse.json({ error: '云端数据读取失败' }, { status: 503 })
@@ -79,7 +82,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Error writing to Blob:', error)
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Failed to save data' },
+      { success: false, error: '云端保存失败' },
       { status: 500 }
     )
   }

@@ -96,6 +96,39 @@ describe('/api/data cloud behavior', () => {
     await expect(response.json()).resolves.toMatchObject({ groups: [], initialized: true })
   })
 
+  it('salvages historical Blob data containing minor field quirks or duplicate IDs instead of locking out with 503', async () => {
+    const legacyPayload = {
+      groups: [
+        {
+          id: 'g-legacy',
+          name: 'Legacy Group',
+          order: 0,
+          color: '#abc', // legacy 3-char hex
+          bookmarks: [
+            { id: 'dup', name: 'One', url: 'https://one.example.com', order: 0, icon: 'data:bad' },
+            { id: 'dup', name: 'Two', url: 'https://two.example.com', order: 1 },
+          ],
+        },
+      ],
+    }
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(legacyPayload)))
+        controller.close()
+      },
+    })
+    vi.mocked(get).mockResolvedValueOnce({ statusCode: 200, stream } as never)
+
+    const response = await GET(authorizedRequest())
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('X-Nav-Data-Source')).toBe('stored')
+    const json = await response.json()
+    expect(json.groups).toHaveLength(1)
+    expect(json.groups[0].bookmarks).toHaveLength(2)
+    expect(json.groups[0].bookmarks[0].id).not.toBe(json.groups[0].bookmarks[1].id)
+  })
+
   it('rejects invalid data before writing', async () => {
     const response = await POST(authorizedRequest('POST', {
       groups: [{ name: 'missing fields' }],

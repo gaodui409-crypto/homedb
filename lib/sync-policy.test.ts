@@ -24,6 +24,15 @@ describe('initial cloud synchronization policy', () => {
     expect(decideInitialSync({ source: 'disabled', hasPendingLocal: false }))
       .toBe('keep-local')
   })
+
+  it('never uploads fallback defaults over cloud data when local storage was corrupt', () => {
+    expect(
+      decideInitialSync({ source: 'stored', hasPendingLocal: true, localCorrupt: true })
+    ).toBe('use-cloud')
+    expect(
+      decideInitialSync({ source: 'missing', hasPendingLocal: false, localCorrupt: true })
+    ).toBe('keep-local')
+  })
 })
 
 describe('pending synchronization marker', () => {
@@ -39,10 +48,28 @@ describe('pending synchronization marker', () => {
   it('persists pending state across page lifetimes and clears it after success', () => {
     const storage = createStorage()
 
-    setPendingSync(storage, true)
+    expect(setPendingSync(storage, true)).toBe(true)
     expect(hasPendingSync(storage)).toBe(true)
 
-    setPendingSync(storage, false)
+    expect(setPendingSync(storage, false)).toBe(true)
     expect(hasPendingSync(storage)).toBe(false)
+  })
+
+  it('does not throw when storage access is denied or throws QuotaExceededError', () => {
+    const throwingStorage = {
+      getItem: () => {
+        throw new Error('SecurityError')
+      },
+      setItem: () => {
+        throw new Error('QuotaExceededError')
+      },
+      removeItem: () => {
+        throw new Error('SecurityError')
+      },
+    }
+
+    expect(hasPendingSync(throwingStorage)).toBe(false)
+    expect(setPendingSync(throwingStorage, true)).toBe(false)
+    expect(hasPendingSync(null)).toBe(false)
   })
 })

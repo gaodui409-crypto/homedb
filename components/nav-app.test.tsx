@@ -145,6 +145,7 @@ vi.mock('@/components/admin-modals', () => ({
   ConfirmDeleteModal: () => null,
   GroupModal: () => null,
   ImportModeModal: () => null,
+  BackgroundModal: () => null,
 }))
 
 vi.mock('@dnd-kit/core', () => ({
@@ -165,7 +166,12 @@ vi.mock('@dnd-kit/sortable', () => ({
     appMocks.sortableContextProps.push(props)
     return props.children
   },
-  arrayMove: vi.fn((items: unknown[]) => items),
+  arrayMove: vi.fn((items: unknown[], from: number, to: number) => {
+    const copy = [...items]
+    const [moved] = copy.splice(from, 1)
+    copy.splice(to, 0, moved)
+    return copy
+  }),
   verticalListSortingStrategy: 'vertical-list-sorting-strategy',
 }))
 
@@ -219,8 +225,10 @@ function createStore(overrides: Partial<Record<string, unknown>> = {}) {
     theme: 'light',
     background: { type: 'none' },
     adminMode: true,
+    syncMode: 'local',
     syncing: false,
     syncError: null,
+    syncNotice: null,
     setAdminMode: vi.fn(),
     setTheme: vi.fn(),
     setTitle: vi.fn(),
@@ -230,6 +238,7 @@ function createStore(overrides: Partial<Record<string, unknown>> = {}) {
     updateBookmark: vi.fn(),
     deleteBookmark: vi.fn(),
     togglePinBookmark: vi.fn(),
+    toggleGroupCollapsed: vi.fn(),
     recordClick: vi.fn(),
     moveBookmark: vi.fn(),
     reorderBookmarks: vi.fn(),
@@ -237,6 +246,7 @@ function createStore(overrides: Partial<Record<string, unknown>> = {}) {
     updateGroup: vi.fn(),
     deleteGroup: vi.fn(),
     reorderGroups: vi.fn(),
+    restoreGroups: vi.fn(),
     importData: vi.fn(),
     retrySyncToCloud: vi.fn(),
     clearSyncError: vi.fn(),
@@ -303,6 +313,7 @@ describe('NavApp sidebar integration', () => {
         onDragStart: expect.any(Function),
         onDragOver: expect.any(Function),
         onDragEnd: expect.any(Function),
+        onDragCancel: expect.any(Function),
       })
     )
     expect(latest<Record<string, unknown>>(appMocks.sortableContextProps)).toEqual(
@@ -409,6 +420,107 @@ describe('NavApp sidebar integration', () => {
     expect(store.moveBookmark).not.toHaveBeenCalled()
     expect(store.reorderGroups).not.toHaveBeenCalled()
     expect(store.reorderBookmarks).not.toHaveBeenCalled()
+  })
+
+  it('stages cross-group bookmark drag in memory, rolls back on cancel, commits once on drop, handles drag-out-and-back reorder, and ignores collapsed groups', () => {
+    const groupsWithCollapsed: Group[] = [
+      ...groups,
+      {
+        id: 'collapsed-grp',
+        name: 'Collapsed',
+        order: 3,
+        color: '#EF4444',
+        collapsed: true,
+        bookmarks: [],
+      },
+    ]
+    const store = createStore({ groups: groupsWithCollapsed })
+    appMocks.useNavStore.mockReturnValue(store)
+    render(<NavApp />)
+
+    const activeBookmark = {
+      id: 'alpha-url',
+      data: {
+        current: {
+          type: 'bookmark',
+          bookmark: groups[0].bookmarks[0],
+        },
+      },
+    }
+
+    // 1. Start drag -> hover over collapsed group -> must NOT swallow bookmark; hover over 'first' -> cancel (Esc)
+    act(() => {
+      const dnd = latest<Record<string, (event: unknown) => void>>(appMocks.dndContextProps)
+      dnd.onDragStart({ active: activeBookmark })
+      dnd.onDragOver({
+        active: activeBookmark,
+        over: { id: 'collapsed-grp', data: { current: { type: 'group' } } },
+      })
+      dnd.onDragOver({
+        active: activeBookmark,
+        over: { id: 'group-drop-first', data: { current: { type: 'group-drop', groupId: 'first' } } },
+      })
+    })
+    expect(store.moveBookmark).not.toHaveBeenCalled()
+
+    act(() => {
+      latest<Record<string, () => void>>(appMocks.dndContextProps).onDragCancel()
+    })
+    expect(store.moveBookmark).not.toHaveBeenCalled()
+
+    // 2. Drag 'alpha-url' out of 'later' into 'first', then drag BACK into 'later' end -> must call reorderBookmarks!
+    act(() => {
+      const dnd = latest<Record<string, (event: unknown) => void>>(appMocks.dndContextProps)
+      dnd.onDragStart({ active: activeBookmark })
+      dnd.onDragOver({
+        active: activeBookmark,
+        over: { id: 'group-drop-first', data: { current: { type: 'group-drop', groupId: 'first' } } },
+      })
+      dnd.onDragOver({
+        active: activeBookmark,
+        over: { id: 'group-drop-later', data: { current: { type: 'group-drop', groupId: 'later' } } },
+      })
+      dnd.onDragEnd({
+        active: activeBookmark,
+        over: { id: 'group-drop-later', data: { current: { type: 'group-drop', groupId: 'later' } } },
+      })
+    })
+    expect(store.reorderBookmarks).toHaveBeenCalledTimes(1)
+    expect(
+      store.reorderBookmarks.mock.calls[0]?.[1]?.map((b: { id: string }) => b.id)
+    ).toEqual(['gamma-name', 'alpha-url'])
+
+    // 3. Cross-group drop onto 'beta-name' in 'first' commits moveBookmark once
+    act(() => {
+      const dnd = latest<Record<string, (event: unknown) => void>>(appMocks.dndContextProps)
+      dnd.onDragStart({ active: activeBookmark })
+      dnd.onDragOver({
+        active: activeBookmark,
+        over: { id: 'beta-name', data: { current: { type: 'bookmark' } } },
+      })
+      dnd.onDragEnd({
+        active: activeBookmark,
+        over: { id: 'alpha-url', data: { current: { type: 'bookmark' } } },
+      })
+    })
+
+    expect(store.moveBookmark).toHaveBeenCalledTimes(1)
+    expect(store.moveBookmark).toHaveBeenCalledWith('later', 'first', 'alpha-url', 0)
+  })
+
+  it('keeps footer and header showing sync failure even after transient toast is dismissed', () => {
+    appMocks.useNavStore.mockReturnValue(
+      createStore({
+        syncMode: 'cloud',
+        syncError: '云端同步失败',
+        syncNotice: null, // Toast already auto-dismissed after 8s
+      })
+    )
+    render(<NavApp />)
+
+    expect(screen.getByText(/同步失败/)).toBeTruthy()
+    expect(screen.queryByText(/已同步/)).toBeNull()
+    expect(latest<HeaderProps>(appMocks.headerProps).syncError).toBe('云端同步失败')
   })
 
   it('uses normalized emptiness for content empty states and management actions', () => {

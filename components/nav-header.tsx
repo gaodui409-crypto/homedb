@@ -4,17 +4,21 @@ import Image from 'next/image'
 import { useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
-  Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, Menu, Paintbrush,
+  Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, CloudOff, HardDrive, Menu, Paintbrush,
   Search, ArrowLeft,
 } from 'lucide-react'
 import type { Theme } from '@/lib/types'
+import type { SyncMode } from '@/lib/use-nav-store'
 import { importNavDataSchema, type ImportNavData } from '@/lib/nav-schema'
 
 interface NavHeaderBaseProps {
   title: string
   theme: Theme
   adminMode: boolean
+  syncMode?: SyncMode
   syncing?: boolean
+  syncError?: string | null
+  onRetrySync?: () => void
   searchQuery: string
   onSearchChange: (query: string) => void
   onThemeChange: (t: Theme) => void
@@ -100,7 +104,10 @@ export function NavHeader({
   title,
   theme,
   adminMode,
+  syncMode,
   syncing,
+  syncError,
+  onRetrySync,
   searchQuery,
   navigationOpen,
   onNavigationOpenChange,
@@ -162,6 +169,18 @@ export function NavHeader({
     setMobileMenuOpen(false)
   }
 
+  const showSyncIndicator = syncMode !== undefined || syncing !== undefined
+  const syncStatusLabel =
+    syncMode === 'local'
+      ? '仅存本机'
+      : syncing
+        ? '同步中'
+        : syncError
+          ? `${syncError}（点击重试）`
+          : syncMode === 'checking'
+            ? '连接云端中'
+            : '已同步'
+
   return (
     <header
       data-nav-header="true"
@@ -189,258 +208,302 @@ export function NavHeader({
             </div>
           ) : (
             <>
-          {onNavigationOpenChange && navigationTriggerRef && (
-            <button
-              ref={navigationTriggerRef}
-              type="button"
-              aria-label="打开分组导航"
-              aria-expanded={navigationOpen}
-              onClick={() => onNavigationOpenChange(true)}
-              className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
-            >
-              <Menu aria-hidden="true" className="size-4" />
-            </button>
-          )}
+              {onNavigationOpenChange && navigationTriggerRef && (
+                <button
+                  ref={navigationTriggerRef}
+                  type="button"
+                  aria-label="打开分组导航"
+                  aria-expanded={navigationOpen}
+                  onClick={() => onNavigationOpenChange(true)}
+                  className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground lg:hidden"
+                >
+                  <Menu aria-hidden="true" className="size-4" />
+                </button>
+              )}
 
-          {/* Title */}
-          <div className="flex-1 flex items-center gap-2 min-w-0">
-            <Image
-              src="/mininav-icon.png"
-              alt="MiniNav"
-              width={22}
-              height={22}
-              className="shrink-0"
-              style={{ width: 22, height: 22 }}
-            />
-            {editingTitle ? (
-              <div className="hidden flex-1 min-w-0 max-w-xs items-center gap-1.5 sm:flex">
-                <input
-                  className="flex-1 min-w-0 bg-transparent border-b-2 border-primary text-lg font-semibold text-foreground focus:outline-none"
-                  value={draftTitle}
-                  onChange={(e) => setDraftTitle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') commitTitle()
-                    if (e.key === 'Escape') { setDraftTitle(title); setEditingTitle(false) }
-                  }}
-                  autoFocus
-                  maxLength={30}
+              {/* Title */}
+              <div className="flex-1 flex items-center gap-2 min-w-0">
+                <Image
+                  src="/mininav-icon.png"
+                  alt="MiniNav"
+                  width={22}
+                  height={22}
+                  className="shrink-0"
+                  style={{ width: 22, height: 22 }}
                 />
-                <button
-                  onClick={commitTitle}
-                  className="size-6 flex items-center justify-center rounded text-primary hover:bg-primary/10 transition-colors"
-                  aria-label="确认修改标题"
-                >
-                  <Check size={14} />
-                </button>
-                <button
-                  onClick={() => { setDraftTitle(title); setEditingTitle(false) }}
-                  className="size-6 flex items-center justify-center rounded text-muted-foreground hover:bg-accent transition-colors"
-                  aria-label="取消修改"
-                >
-                  <X size={14} />
-                </button>
+                {editingTitle ? (
+                  <div className="hidden flex-1 min-w-0 max-w-xs items-center gap-1.5 sm:flex">
+                    <input
+                      className="flex-1 min-w-0 bg-transparent border-b-2 border-primary text-lg font-semibold text-foreground focus:outline-none"
+                      value={draftTitle}
+                      onChange={(e) => setDraftTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) commitTitle()
+                        if (e.key === 'Escape') { setDraftTitle(title); setEditingTitle(false) }
+                      }}
+                      autoFocus
+                      maxLength={30}
+                    />
+                    <button
+                      type="button"
+                      onClick={commitTitle}
+                      className="size-6 flex items-center justify-center rounded text-primary hover:bg-primary/10 transition-colors"
+                      aria-label="确认修改标题"
+                    >
+                      <Check size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setDraftTitle(title); setEditingTitle(false) }}
+                      className="size-6 flex items-center justify-center rounded text-muted-foreground hover:bg-accent transition-colors"
+                      aria-label="取消修改"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="group/title flex min-w-0 items-center gap-1.5">
+                    <h1 className="sr-only font-semibold text-foreground sm:not-sr-only sm:min-w-0 sm:truncate sm:text-lg">
+                      {title}
+                    </h1>
+                    {adminMode && (
+                      <button
+                        type="button"
+                        onClick={() => { setDraftTitle(title); setEditingTitle(true) }}
+                        className="hidden size-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/title:opacity-100 focus-visible:opacity-100 sm:flex"
+                        aria-label="编辑标题"
+                        title="编辑标题"
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="group/title flex min-w-0 items-center gap-1.5">
-                <h1 className="sr-only font-semibold text-foreground sm:not-sr-only sm:min-w-0 sm:truncate sm:text-lg">
-                  {title}
-                </h1>
+
+              <div className="hidden w-40 shrink-0 md:flex lg:w-48 xl:w-64">
+                <SearchField
+                  query={searchQuery}
+                  label="搜索书签"
+                  onChange={onSearchChange}
+                />
+              </div>
+
+              <button
+                type="button"
+                aria-label="打开搜索"
+                onClick={() => setMobileSearchOpen(true)}
+                className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+              >
+                <Search aria-hidden="true" className="size-4" />
+              </button>
+
+              {/* Right actions */}
+              <div className="flex shrink-0 items-center gap-1.5">
+                {/* Admin actions */}
                 {adminMode && (
+                  <>
+                    {/* Desktop: show buttons directly */}
+                    <button
+                      type="button"
+                      onClick={onExport}
+                      className="hidden sm:flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-accent transition-colors"
+                      title="导出 JSON"
+                    >
+                      <Download size={13} />
+                      <span>导出</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="hidden sm:flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-accent transition-colors"
+                      title="导入 JSON"
+                    >
+                      <Upload size={13} />
+                      <span>导入</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onAddGroup}
+                      className="hidden sm:flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+                      title="新建分组"
+                    >
+                      <Plus size={13} />
+                      <span>新建分组</span>
+                    </button>
+
+                    {/* Mobile: dropdown menu */}
+                    <div className="relative sm:hidden">
+                      <button
+                        type="button"
+                        onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                        className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                        aria-label="更多操作"
+                        aria-expanded={mobileMenuOpen}
+                      >
+                        <MoreVertical size={15} />
+                      </button>
+                      {mobileMenuOpen && (
+                        <>
+                          {/* Backdrop to close menu */}
+                          <div
+                            className="fixed inset-0 z-40"
+                            onClick={() => setMobileMenuOpen(false)}
+                          />
+                          <div className="absolute right-0 top-full mt-1 z-50 min-w-[140px] py-1 rounded-lg border border-border bg-card shadow-lg">
+                            <button
+                              type="button"
+                              onClick={() => { onAddGroup(); setMobileMenuOpen(false) }}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
+                            >
+                              <Plus size={14} />
+                              <span>新建分组</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { onExport(); setMobileMenuOpen(false) }}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
+                            >
+                              <Download size={14} />
+                              <span>导出 JSON</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { fileInputRef.current?.click() }}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
+                            >
+                              <Upload size={14} />
+                              <span>导入 JSON</span>
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={handleFileChange}
+                      className="sr-only"
+                      aria-hidden
+                    />
+                  </>
+                )}
+
+                {/* Background settings */}
+                <button
+                  type="button"
+                  onClick={onOpenBackground}
+                  className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  title="背景自定义"
+                  aria-label="背景自定义"
+                >
+                  <Paintbrush size={15} />
+                </button>
+
+                {/* Theme switcher */}
+                <button
+                  type="button"
+                  onClick={() => onThemeChange(nextTheme.key)}
+                  className="flex size-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:hidden"
+                  title={`切换主题，当前${currentTheme.label}`}
+                  aria-label={`切换主题，当前${currentTheme.label}`}
+                >
+                  {currentTheme.icon}
+                </button>
+                <div
+                  data-testid="desktop-theme-switcher"
+                  className="hidden items-center overflow-hidden rounded-lg border border-border sm:flex"
+                >
+                  {THEMES.map(({ key, icon, label }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => onThemeChange(key)}
+                      className={`h-8 w-8 flex items-center justify-center transition-colors ${
+                        currentTheme.key === key
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-accent'
+                      }`}
+                      title={label}
+                      aria-label={label}
+                      aria-pressed={currentTheme.key === key}
+                    >
+                      {icon}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Sync indicator */}
+                {showSyncIndicator && (
+                  syncError && onRetrySync ? (
+                    <button
+                      type="button"
+                      onClick={onRetrySync}
+                      aria-label={syncStatusLabel}
+                      title={syncStatusLabel}
+                      className="h-8 w-8 flex items-center justify-center rounded-lg text-destructive hover:bg-destructive/10 transition-colors"
+                    >
+                      <CloudOff aria-hidden="true" size={15} />
+                    </button>
+                  ) : (
+                    <div
+                      role="img"
+                      aria-label={syncStatusLabel}
+                      className="h-8 w-8 flex items-center justify-center"
+                      title={syncStatusLabel}
+                    >
+                      {syncMode === 'local' ? (
+                        <HardDrive aria-hidden="true" size={14} className="text-muted-foreground" />
+                      ) : syncError ? (
+                        <CloudOff aria-hidden="true" size={15} className="text-destructive" />
+                      ) : (
+                        <Cloud
+                          aria-hidden="true"
+                          size={15}
+                          className={
+                            syncing
+                              ? 'text-primary animate-pulse'
+                              : syncMode === 'checking'
+                                ? 'text-muted-foreground'
+                                : 'text-emerald-500'
+                          }
+                        />
+                      )}
+                    </div>
+                  )
+                )}
+
+                {/* Admin toggle */}
+                <button
+                  type="button"
+                  onClick={onAdminToggle}
+                  className={`h-8 w-8 flex items-center justify-center rounded-lg border transition-colors ${
+                    adminMode
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
+                  }`}
+                  title={adminMode ? '退出管理模式' : '进入管理模式'}
+                  aria-label={adminMode ? '退出管理模式' : '进入管理模式'}
+                  aria-pressed={adminMode}
+                >
+                  <Settings size={15} />
+                </button>
+
+                {/* Logout button */}
+                {onLogout && (
                   <button
-                    onClick={() => { setDraftTitle(title); setEditingTitle(true) }}
-                    className="hidden size-6 items-center justify-center rounded text-muted-foreground opacity-0 transition-all hover:bg-accent hover:text-foreground group-hover/title:opacity-100 sm:flex"
-                    aria-label="编辑标题"
-                    title="编辑标题"
+                    type="button"
+                    onClick={onLogout}
+                    className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                    title="退出登录"
+                    aria-label="退出登录"
                   >
-                    <Pencil size={13} />
+                    <LogOut size={15} />
                   </button>
                 )}
               </div>
-            )}
-          </div>
-
-          <div className="hidden w-40 shrink-0 md:flex lg:w-48 xl:w-64">
-            <SearchField
-              query={searchQuery}
-              label="搜索书签"
-              onChange={onSearchChange}
-            />
-          </div>
-
-          <button
-            type="button"
-            aria-label="打开搜索"
-            onClick={() => setMobileSearchOpen(true)}
-            className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
-          >
-            <Search aria-hidden="true" className="size-4" />
-          </button>
-
-          {/* Right actions */}
-          <div className="flex shrink-0 items-center gap-1.5">
-            {/* Admin actions */}
-            {adminMode && (
-              <>
-                {/* Desktop: show buttons directly */}
-                <button
-                  onClick={onExport}
-                  className="hidden sm:flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-accent transition-colors"
-                  title="导出 JSON"
-                >
-                  <Download size={13} />
-                  <span>导出</span>
-                </button>
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="hidden sm:flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-lg border border-border text-foreground hover:bg-accent transition-colors"
-                  title="导入 JSON"
-                >
-                  <Upload size={13} />
-                  <span>导入</span>
-                </button>
-                <button
-                  onClick={onAddGroup}
-                  className="hidden sm:flex items-center gap-1.5 px-3 h-8 text-xs font-medium rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
-                  title="新建分组"
-                >
-                  <Plus size={13} />
-                  <span>新建分组</span>
-                </button>
-
-                {/* Mobile: dropdown menu */}
-                <div className="relative sm:hidden">
-                  <button
-                    onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                    className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                    aria-label="更多操作"
-                    aria-expanded={mobileMenuOpen}
-                  >
-                    <MoreVertical size={15} />
-                  </button>
-                  {mobileMenuOpen && (
-                    <>
-                      {/* Backdrop to close menu */}
-                      <div
-                        className="fixed inset-0 z-40"
-                        onClick={() => setMobileMenuOpen(false)}
-                      />
-                      <div className="absolute right-0 top-full mt-1 z-50 min-w-[140px] py-1 rounded-lg border border-border bg-card shadow-lg">
-                        <button
-                          onClick={() => { onAddGroup(); setMobileMenuOpen(false) }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
-                        >
-                          <Plus size={14} />
-                          <span>新建分组</span>
-                        </button>
-                        <button
-                          onClick={() => { onExport(); setMobileMenuOpen(false) }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
-                        >
-                          <Download size={14} />
-                          <span>导出 JSON</span>
-                        </button>
-                        <button
-                          onClick={() => { fileInputRef.current?.click() }}
-                          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-accent transition-colors"
-                        >
-                          <Upload size={14} />
-                          <span>导入 JSON</span>
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  onChange={handleFileChange}
-                  className="sr-only"
-                  aria-hidden
-                />
-              </>
-            )}
-
-            {/* Background settings */}
-            <button
-              onClick={onOpenBackground}
-              className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              title="背景自定义"
-              aria-label="背景自定义"
-            >
-              <Paintbrush size={15} />
-            </button>
-
-            {/* Theme switcher */}
-            <button
-              type="button"
-              onClick={() => onThemeChange(nextTheme.key)}
-              className="flex size-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:hidden"
-              title={`切换主题，当前${currentTheme.label}`}
-              aria-label={`切换主题，当前${currentTheme.label}`}
-            >
-              {currentTheme.icon}
-            </button>
-            <div
-              data-testid="desktop-theme-switcher"
-              className="hidden items-center overflow-hidden rounded-lg border border-border sm:flex"
-            >
-              {THEMES.map(({ key, icon, label }) => (
-                <button
-                  key={key}
-                  onClick={() => onThemeChange(key)}
-                  className={`h-8 w-8 flex items-center justify-center transition-colors ${
-                    currentTheme.key === key
-                      ? 'bg-primary text-primary-foreground'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-accent'
-                  }`}
-                  title={label}
-                  aria-label={label}
-                  aria-pressed={currentTheme.key === key}
-                >
-                  {icon}
-                </button>
-              ))}
-            </div>
-
-            {/* Sync indicator */}
-            {syncing !== undefined && (
-              <div
-                className="h-8 w-8 flex items-center justify-center"
-                title={syncing ? '正在同步...' : '已同步'}
-              >
-                <Cloud size={15} className={syncing ? 'text-primary animate-pulse' : 'text-green-500'} />
-              </div>
-            )}
-
-            {/* Admin toggle */}
-            <button
-              onClick={onAdminToggle}
-              className={`h-8 w-8 flex items-center justify-center rounded-lg border transition-colors ${
-                adminMode
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'border-border text-muted-foreground hover:text-foreground hover:bg-accent'
-              }`}
-              title={adminMode ? '退出管理模式' : '进入管理模式'}
-              aria-label={adminMode ? '退出管理模式' : '进入管理模式'}
-              aria-pressed={adminMode}
-            >
-              <Settings size={15} />
-            </button>
-
-            {/* Logout button */}
-            {onLogout && (
-              <button
-                onClick={onLogout}
-                className="h-8 w-8 flex items-center justify-center rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                title="退出登录"
-                aria-label="退出登录"
-              >
-                <LogOut size={15} />
-              </button>
-            )}
-          </div>
             </>
           )}
         </div>

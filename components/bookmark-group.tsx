@@ -11,6 +11,7 @@ interface BookmarkGroupProps {
   group: Group
   adminMode: boolean
   dragEnabled?: boolean
+  bookmarkDragEnabled?: boolean
   onAddBookmark: (groupId: string) => void
   onEditBookmark: (groupId: string, bookmark: Bookmark) => void
   onDeleteBookmark: (groupId: string, bookmarkId: string) => void
@@ -65,6 +66,7 @@ function BookmarkGroup({
   group,
   adminMode,
   dragEnabled = adminMode,
+  bookmarkDragEnabled,
   onAddBookmark,
   onEditBookmark,
   onDeleteBookmark,
@@ -77,13 +79,14 @@ function BookmarkGroup({
   isDragging,
 }: InternalGroupProps) {
   const collapsed = !!group.collapsed
+  const canDragBookmarks = (bookmarkDragEnabled ?? dragEnabled) && !collapsed
   const sortedBookmarks = [...group.bookmarks].sort((a, b) => a.order - b.order)
   const bookmarkIds = sortedBookmarks.map((b) => b.id)
 
-  // Make the group section a droppable zone for cross-group drops
+  // Make the expanded group section a droppable zone for cross-group bookmark drops
   const { setNodeRef: setDropRef, isOver } = useDroppable({
     id: `group-drop-${group.id}`,
-    disabled: !dragEnabled,
+    disabled: !canDragBookmarks,
     data: { type: 'group-drop', groupId: group.id },
   })
 
@@ -112,6 +115,7 @@ function BookmarkGroup({
 
         {/* Collapse toggle: dot + name + chevron */}
         <button
+          type="button"
           onClick={() => onToggleCollapse(group.id)}
           className="flex items-center gap-2 flex-1 min-w-0 text-left group/collapse"
           aria-expanded={!collapsed}
@@ -138,8 +142,9 @@ function BookmarkGroup({
         </button>
 
         {adminMode && (
-          <div className="flex items-center gap-1 opacity-0 group-hover/header:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover/header:opacity-100 sm:group-focus-within/header:opacity-100 transition-opacity">
             <button
+              type="button"
               onClick={() => onEditGroup(group)}
               className="size-6 flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
               aria-label="编辑分组"
@@ -148,6 +153,7 @@ function BookmarkGroup({
               <Pencil size={13} />
             </button>
             <button
+              type="button"
               onClick={() => onDeleteGroup(group.id)}
               className="size-6 flex items-center justify-center rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
               aria-label="删除分组"
@@ -171,7 +177,7 @@ function BookmarkGroup({
                 key={bm.id}
                 bookmark={bm}
                 adminMode={adminMode}
-                dragEnabled={dragEnabled}
+                dragEnabled={canDragBookmarks}
                 onEdit={(b) => onEditBookmark(group.id, b)}
                 onDelete={(id) => onDeleteBookmark(group.id, id)}
                 onTogglePin={(id) => onTogglePin(group.id, id)}
@@ -182,6 +188,7 @@ function BookmarkGroup({
             {/* Add Bookmark Button */}
             {adminMode && (
               <button
+                type="button"
                 onClick={() => onAddBookmark(group.id)}
                 className="nav-card flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-border text-muted-foreground hover:text-primary hover:border-primary transition-colors min-h-[60px] text-sm"
               >

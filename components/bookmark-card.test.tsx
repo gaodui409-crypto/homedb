@@ -7,15 +7,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BookmarkCard } from './bookmark-card'
 import type { Bookmark } from '@/lib/types'
 
-vi.mock('@dnd-kit/sortable', () => ({
-  useSortable: () => ({
-    attributes: {},
-    listeners: {},
+const sortableMocks = vi.hoisted(() => ({
+  useSortable: vi.fn(() => ({
+    attributes: { 'data-sortable-attr': 'yes' },
+    listeners: { 'data-sortable-listener': 'yes' },
     setNodeRef: vi.fn(),
     transform: null,
     transition: undefined,
     isDragging: false,
-  }),
+  })),
+}))
+
+vi.mock('@dnd-kit/sortable', () => ({
+  useSortable: sortableMocks.useSortable,
 }))
 
 vi.mock('@dnd-kit/utilities', () => ({
@@ -35,22 +39,31 @@ const baseBookmark: Bookmark = {
   order: 0,
 }
 
-function renderCard(bookmark: Bookmark) {
+function renderCard(
+  bookmark: Bookmark,
+  overrides: { adminMode?: boolean; dragEnabled?: boolean } = {}
+) {
   const onOpen = vi.fn()
+  const onEdit = vi.fn()
+  const onDelete = vi.fn()
+  const onTogglePin = vi.fn()
   const result = render(
     <BookmarkCard
       bookmark={bookmark}
-      adminMode={false}
-      onEdit={vi.fn()}
-      onDelete={vi.fn()}
+      adminMode={overrides.adminMode ?? false}
+      dragEnabled={overrides.dragEnabled}
+      onEdit={onEdit}
+      onDelete={onDelete}
+      onTogglePin={onTogglePin}
       onOpen={onOpen}
     />
   )
 
-  return { ...result, onOpen }
+  return { ...result, onOpen, onEdit, onDelete, onTogglePin }
 }
 
 beforeEach(() => {
+  sortableMocks.useSortable.mockClear()
   vi.spyOn(window, 'open').mockImplementation(() => null)
 })
 
@@ -59,7 +72,7 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('BookmarkCard status', () => {
+describe('BookmarkCard status and drag attributes', () => {
   it('keeps the domain visible while exposing frequent and important states', () => {
     renderCard({
       ...baseBookmark,
@@ -80,6 +93,40 @@ describe('BookmarkCard status', () => {
     expect(screen.queryByLabelText(/常用，已打开/)).toBeNull()
     expect(screen.queryByLabelText('重点书签')).toBeNull()
     expect(screen.queryByRole('button', { name: '查看备注' })).toBeNull()
+  })
+
+  it('does not attach drag attributes onto the card when dragEnabled is false in adminMode', () => {
+    renderCard(baseBookmark, { adminMode: true, dragEnabled: false })
+
+    const card = screen.getByRole('link', { name: '打开 Server Console' })
+    expect(card.getAttribute('data-sortable-attr')).toBeNull()
+    expect(card.getAttribute('data-sortable-listener')).toBeNull()
+  })
+
+  it('activates admin pin/edit/delete buttons via Enter and Space without opening the bookmark URL', async () => {
+    const user = userEvent.setup()
+    const { onOpen, onEdit, onDelete, onTogglePin } = renderCard(baseBookmark, {
+      adminMode: true,
+      dragEnabled: false,
+    })
+
+    const pinBtn = screen.getByRole('button', { name: '标记重点' })
+    pinBtn.focus()
+    await user.keyboard('{Enter}')
+    expect(onTogglePin).toHaveBeenCalledWith('server-console')
+
+    const editBtn = screen.getByRole('button', { name: '编辑书签' })
+    editBtn.focus()
+    await user.keyboard(' ')
+    expect(onEdit).toHaveBeenCalledWith(baseBookmark)
+
+    const deleteBtn = screen.getByRole('button', { name: '删除书签' })
+    deleteBtn.focus()
+    await user.keyboard('{Enter}')
+    expect(onDelete).toHaveBeenCalledWith('server-console')
+
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(window.open).not.toHaveBeenCalled()
   })
 })
 

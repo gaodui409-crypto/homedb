@@ -14,15 +14,17 @@ interface FaviconImageProps {
 
 /**
  * Renders a bookmark icon with automatic fallback chain:
- * builtin icon -> custom icon URL -> favicon.im -> Google s2 -> DuckDuckGo -> letter avatar.
- * IP / intranet hosts skip remote favicon services entirely (they only return placeholders).
+ * builtin icon -> custom HTTP(S) icon URL -> favicon.im -> Google s2 -> DuckDuckGo -> letter avatar.
+ * Unknown legacy `builtin:*` markers and IP / intranet hosts skip invalid/remote requests cleanly.
  */
 export function FaviconImage({ url, name, customIcon, className = 'size-9 rounded-lg' }: FaviconImageProps) {
-  const builtin = customIcon && isBuiltinIcon(customIcon) ? getBuiltinIcon(customIcon) : undefined
+  const hasBuiltinPrefix = isBuiltinIcon(customIcon)
+  const builtin = hasBuiltinPrefix && customIcon ? getBuiltinIcon(customIcon) : undefined
+  const customHttpIcon = !hasBuiltinPrefix && customIcon ? customIcon : undefined
   const sources = builtin
     ? []
-    : customIcon
-      ? [customIcon, ...getFaviconSources(url)]
+    : customHttpIcon
+      ? [customHttpIcon, ...getFaviconSources(url)]
       : getFaviconSources(url)
   const sourceKey = `${url}\0${customIcon ?? ''}`
   const [sourceState, setSourceState] = useState({ key: sourceKey, index: 0 })
@@ -51,7 +53,7 @@ export function FaviconImage({ url, name, customIcon, className = 'size-9 rounde
     >
       {!exhausted ? (
         <img
-          src={sources[srcIndex] || '/placeholder.svg'}
+          src={sources[srcIndex]}
           alt={name}
           width={36}
           height={36}
@@ -62,7 +64,7 @@ export function FaviconImage({ url, name, customIcon, className = 'size-9 rounde
           }))}
         />
       ) : (
-        <span>{name.trim().charAt(0).toUpperCase()}</span>
+        <span>{name.trim().charAt(0).toUpperCase() || '?'}</span>
       )}
     </div>
   )
