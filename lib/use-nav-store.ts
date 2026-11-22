@@ -82,13 +82,29 @@ function applyClickDeltas(
   return { groups: applied ? nextGroups : groups, applied }
 }
 
+function applyCollapseOverrides(
+  groups: Group[],
+  overrides: ReadonlyMap<string, boolean>
+): { groups: Group[]; applied: boolean } {
+  if (overrides.size === 0) return { groups, applied: false }
+  let applied = false
+  const nextGroups = groups.map((group) => {
+    if (!overrides.has(group.id)) return group
+    const nextCollapsed = overrides.get(group.id)!
+    if (Boolean(group.collapsed) === nextCollapsed) return group
+    applied = true
+    return { ...group, collapsed: nextCollapsed }
+  })
+  return { groups: applied ? nextGroups : groups, applied }
+}
+
 export function useNavStore() {
   const [initialGroupsState] = useState(() => loadStoredGroups())
   const [groups, setGroupsState] = useState<Group[]>(initialGroupsState.groups)
   const [theme, setThemeState] = useState<Theme>(() => loadTheme())
   const [title, setTitleState] = useState<string>(() => loadTitle())
   const [background, setBackgroundState] = useState<BackgroundSetting>(() => loadBackground())
-  const [adminMode, setAdminMode] = useState(false)
+  const [adminMode, setAdminModeState] = useState(false)
   const [syncMode, setSyncMode] = useState<SyncMode>('checking')
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -99,6 +115,9 @@ export function useNavStore() {
   const hasUserMutatedRef = useRef(false)
   const initialCloudResolvedRef = useRef(false)
   const pendingClicksRef = useRef<Map<string, number>>(new Map())
+  const pendingCollapseRef = useRef<Map<string, boolean>>(new Map())
+  const adminModeRef = useRef(false)
+  const syncErrorRef = useRef<string | null>(null)
   const syncModeRef = useRef<SyncMode>('checking')
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncVersionRef = useRef(0)
@@ -124,10 +143,24 @@ export function useNavStore() {
   const reportError = useCallback((message: string, retryable: boolean, markSyncError = true) => {
     if (unmountedRef.current) return
     if (markSyncError) {
+      syncErrorRef.current = message
       setSyncError(message)
     }
     setSyncNotice({ message, retryable })
   }, [])
+
+  const setAdminMode = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      const target = typeof next === 'function' ? next(adminModeRef.current) : next
+      if (target && !initialCloudResolvedRef.current && syncErrorRef.current === null) {
+        reportError('正在连接云端，请稍后再编辑', false, false)
+        return
+      }
+      adminModeRef.current = target
+      setAdminModeState(target)
+    },
+    [reportError]
+  )
 
   // Dismisses only the transient toast; persistent syncError remains until a sync succeeds
   const clearSyncError = useCallback(() => {
@@ -196,6 +229,7 @@ export function useNavStore() {
 
             if (result.local) {
               syncModeRef.current = 'local'
+              syncErrorRef.current = null
               setPendingSync(getBrowserStorage(), false)
               if (!unmountedRef.current) {
                 setSyncMode('local')
@@ -206,6 +240,7 @@ export function useNavStore() {
             }
 
             syncModeRef.current = 'cloud'
+            syncErrorRef.current = null
             if (!unmountedRef.current) {
               setSyncMode('cloud')
               setSyncError(null)
@@ -264,9 +299,12 @@ export function useNavStore() {
       if (source === 'disabled') {
         initialCloudResolvedRef.current = true
         syncModeRef.current = 'local'
-        const hadPendingClicks = pendingClicksRef.current.size > 0
+        syncErrorRef.current = null
+        const hadPendingViewActions =
+          pendingClicksRef.current.size > 0 || pendingCollapseRef.current.size > 0
         pendingClicksRef.current.clear()
-        if (hadPendingClicks && localStatusRef.current !== 'corrupt') {
+        pendingCollapseRef.current.clear()
+        if (hadPendingViewActions && localStatusRef.current !== 'corrupt') {
           localStatusRef.current = 'valid'
           saveGroupsLocal(groupsRef.current)
         }
@@ -284,6 +322,7 @@ export function useNavStore() {
 
       initialCloudResolvedRef.current = true
       syncModeRef.current = 'cloud'
+      syncErrorRef.current = null
       if (!unmountedRef.current) {
         setSyncMode('cloud')
         setSyncError(null)
@@ -305,15 +344,20 @@ export function useNavStore() {
       })
 
       const bufferedClicks = new Map(pendingClicksRef.current)
+      const bufferedCollapses = new Map(pendingCollapseRef.current)
       pendingClicksRef.current.clear()
+      pendingCollapseRef.current.clear()
 
       if (action === 'upload-local') {
         syncToCloud(groupsRef.current, 0)
       } else if (action === 'use-cloud') {
-        const { groups: mergedGroups, applied } = applyClickDeltas(
-          recovered.groups,
-          bufferedClicks
+        const afterClicks = applyClickDeltas(recovered.groups, bufferedClicks)
+        const afterCollapses = applyCollapseOverrides(
+          afterClicks.groups,
+          bufferedCollapses
         )
+        const mergedGroups = afterCollapses.groups
+        const applied = afterClicks.applied || afterCollapses.applied
         localStatusRef.current = 'valid'
         groupsRef.current = mergedGroups
         saveGroupsLocal(mergedGroups)
@@ -716,6 +760,22 @@ export function useNavStore() {
 
   const toggleGroupCollapsed = useCallback(
     (groupId: string) => {
+      if (!initialCloudResolvedRef.current) {
+        const target = groupsRef.current.find((g) => g.id === groupId)
+        if (!target) return
+        const nextCollapsed = !target.collapsed
+        pendingCollapseRef.current.set(groupId, nextCollapsed)
+        const next = groupsRef.current.map((g) =>
+          g.id === groupId ? { ...g, collapsed: nextCollapsed } : g
+        )
+        groupsRef.current = next
+        setGroupsState(next)
+        if (localStatusRef.current === 'valid') {
+          saveGroupsLocal(next)
+        }
+        return
+      }
+
       setGroups((prev) =>
         prev.map((g) => (g.id === groupId ? { ...g, collapsed: !g.collapsed } : g))
       )

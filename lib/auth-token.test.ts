@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createToken, isAuthorizationValid, safeCompare, verifyToken } from './auth-token'
 
@@ -6,6 +6,10 @@ const SECRET = 'review-secret'
 const NOW = 1_800_000_000_000
 
 describe('auth tokens', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it('compares passwords without depending on their byte length', () => {
     expect(safeCompare('secret', 'secret')).toBe(true)
     expect(safeCompare('secret', 'different-length-secret')).toBe(false)
@@ -37,6 +41,13 @@ describe('auth tokens', () => {
     expect(isAuthorizationValid(token, SECRET, NOW)).toBe(false)
     expect(isAuthorizationValid(`Basic ${token}`, SECRET, NOW)).toBe(false)
     expect(isAuthorizationValid(null, SECRET, NOW)).toBe(false)
+
+    vi.stubEnv('NAV_PASSWORD', '')
     expect(isAuthorizationValid(null, undefined, NOW)).toBe(true)
+    expect(isAuthorizationValid(null, '', NOW)).toBe(true)
+
+    vi.stubEnv('NAV_PASSWORD', SECRET)
+    expect(isAuthorizationValid(null, undefined, NOW)).toBe(false)
+    expect(isAuthorizationValid(`Bearer ${token}`, undefined, NOW)).toBe(true)
   })
 })

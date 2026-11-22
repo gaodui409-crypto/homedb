@@ -445,4 +445,89 @@ describe('useNavStore', () => {
       retryable: false,
     })
   })
+
+  it('buffers early group collapse and blocks entering admin mode until initial cloud fetch resolves', async () => {
+    let resolveInitialGet!: (res: Response) => void
+    const postedPayloads: Array<{ groups: Group[] }> = []
+
+    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        postedPayloads.push(JSON.parse(String(init.body)) as { groups: Group[] })
+        return Promise.resolve(jsonResponse({ success: true }))
+      }
+      return new Promise<Response>((resolve) => {
+        resolveInitialGet = resolve
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useNavStore())
+
+    act(() => {
+      result.current.toggleGroupCollapsed('g-vps')
+      result.current.setAdminMode(true)
+    })
+
+    // Collapse updates UI immediately without marking pending upload; admin mode waits for handshake
+    expect(result.current.groups[0].collapsed).toBe(true)
+    expect(result.current.adminMode).toBe(false)
+    expect(result.current.syncNotice).toEqual({
+      message: '正在连接云端，请稍后再编辑',
+      retryable: false,
+    })
+    expect(localStorage.getItem(PENDING_SYNC_KEY)).toBeNull()
+    expect(postedPayloads).toHaveLength(0)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    const cloudGroups: Group[] = [
+      {
+        ...sampleGroups[0],
+        bookmarks: [
+          ...sampleGroups[0].bookmarks,
+          {
+            id: 'b-phone',
+            name: 'Added on phone',
+            url: 'https://phone.example.com',
+            order: 3,
+          },
+        ],
+      },
+      sampleGroups[1],
+    ]
+
+    await act(async () => {
+      resolveInitialGet(
+        jsonResponse(
+          { groups: cloudGroups, initialized: true, storage: 'blob' },
+          { 'X-Nav-Data-Source': 'stored' }
+        )
+      )
+    })
+
+    await waitFor(() => expect(result.current.syncMode).toBe('cloud'))
+    await waitFor(() => expect(postedPayloads).toHaveLength(1))
+
+    // Cloud bookmark survives AND buffered collapse state is merged and persisted
+    expect(result.current.groups[0].collapsed).toBe(true)
+    expect(result.current.groups[0].bookmarks.map((b) => b.id)).toEqual([
+      'b-1',
+      'b-2',
+      'b-3',
+      'b-phone',
+    ])
+    expect(postedPayloads[0].groups[0].collapsed).toBe(true)
+    expect(postedPayloads[0].groups[0].bookmarks.map((b) => b.id)).toEqual([
+      'b-1',
+      'b-2',
+      'b-3',
+      'b-phone',
+    ])
+
+    // Once handshake completes, admin mode unlocks normally
+    act(() => {
+      result.current.setAdminMode(true)
+    })
+    expect(result.current.adminMode).toBe(true)
+  })
 })
