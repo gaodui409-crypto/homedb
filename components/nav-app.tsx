@@ -138,7 +138,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 export function NavApp() {
   const store = useNavStore()
-  const { adminMode, setAdminMode } = store
+  const { adminMode, setAdminMode, clearSyncError } = store
   const [modal, setModal] = useState<ModalState>({ type: 'none' })
   const [activeDrag, setActiveDrag] = useState<ActiveDrag>(null)
   const [dragDraftGroups, setDragDraftGroups] = useState<Group[] | null>(null)
@@ -356,6 +356,18 @@ export function NavApp() {
       target,
     })
   }, [])
+
+  const handleDismissUndo = useCallback(() => {
+    setUndoState(null)
+  }, [])
+
+  const handleDismissError = useCallback(() => {
+    if (importError) {
+      setImportError(null)
+    } else {
+      clearSyncError()
+    }
+  }, [clearSyncError, importError])
 
   const handleApplyUndo = useCallback(() => {
     if (!undoState) return
@@ -724,7 +736,10 @@ export function NavApp() {
                   </p>
                   <button
                     type="button"
-                    onClick={() => setSearchQuery('')}
+                    onClick={() => {
+                      setSearchQuery('')
+                      setSelectedSearchId(null)
+                    }}
                     className="px-4 py-2 rounded-lg bg-accent text-foreground text-sm font-medium hover:bg-accent/80 transition-colors"
                   >
                     清除搜索
@@ -900,7 +915,7 @@ export function NavApp() {
               key={undoState.id}
               label={undoState.label}
               onUndo={handleApplyUndo}
-              onDismiss={() => setUndoState(null)}
+              onDismiss={handleDismissUndo}
             />
           )}
 
@@ -909,10 +924,7 @@ export function NavApp() {
               error={activeErrorMessage}
               showRetry={activeErrorRetryable}
               onRetry={store.retrySyncToCloud}
-              onDismiss={() => {
-                if (importError) setImportError(null)
-                else store.clearSyncError()
-              }}
+              onDismiss={handleDismissError}
             />
           )}
         </div>
@@ -931,12 +943,17 @@ function UndoToast({
   onDismiss: () => void
 }) {
   const [paused, setPaused] = useState(false)
+  const onDismissRef = useRef(onDismiss)
+
+  useEffect(() => {
+    onDismissRef.current = onDismiss
+  }, [onDismiss])
 
   useEffect(() => {
     if (paused) return
-    const timer = setTimeout(onDismiss, 6000)
+    const timer = setTimeout(() => onDismissRef.current(), 6000)
     return () => clearTimeout(timer)
-  }, [paused, onDismiss])
+  }, [paused])
 
   return (
     <div
@@ -981,12 +998,17 @@ function SyncErrorToast({
   onDismiss: () => void
 }) {
   const [paused, setPaused] = useState(false)
+  const onDismissRef = useRef(onDismiss)
+
+  useEffect(() => {
+    onDismissRef.current = onDismiss
+  }, [onDismiss])
 
   useEffect(() => {
     if (paused) return
-    const timer = setTimeout(onDismiss, 8000)
+    const timer = setTimeout(() => onDismissRef.current(), 8000)
     return () => clearTimeout(timer)
-  }, [error, paused, onDismiss])
+  }, [error, paused])
 
   return (
     <div

@@ -324,4 +324,125 @@ describe('useNavStore', () => {
     await waitFor(() => expect(result.current.syncing).toBe(false))
     expect(localStorage.getItem(PENDING_SYNC_KEY)).toBeNull()
   })
+
+  it('buffers early clicks before initial cloud fetch resolves and merges them onto newer cloud data instead of overwriting cloud', async () => {
+    let resolveInitialGet!: (res: Response) => void
+    const postedPayloads: Array<{ groups: Group[] }> = []
+
+    const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        postedPayloads.push(JSON.parse(String(init.body)) as { groups: Group[] })
+        return Promise.resolve(jsonResponse({ success: true }))
+      }
+      return new Promise<Response>((resolve) => {
+        resolveInitialGet = resolve
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useNavStore())
+
+    // User clicks immediately on a stale-but-valid cached PC before cloud GET finishes
+    act(() => {
+      result.current.recordClick('b-1')
+      result.current.recordClick('b-1')
+    })
+
+    expect(result.current.groups[0].bookmarks[0].clicks).toBe(2)
+    expect(localStorage.getItem(PENDING_SYNC_KEY)).toBeNull()
+    expect(postedPayloads).toHaveLength(0)
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+    // Cloud has newer bookmark added from phone plus existing cloud clicks on b-1
+    const cloudGroups: Group[] = [
+      {
+        ...sampleGroups[0],
+        bookmarks: [
+          { ...sampleGroups[0].bookmarks[0], clicks: 2 },
+          sampleGroups[0].bookmarks[1],
+          sampleGroups[0].bookmarks[2],
+          {
+            id: 'b-phone',
+            name: 'Added on phone',
+            url: 'https://phone.example.com',
+            order: 3,
+          },
+        ],
+      },
+      sampleGroups[1],
+    ]
+
+    await act(async () => {
+      resolveInitialGet(
+        jsonResponse(
+          { groups: cloudGroups, initialized: true, storage: 'blob' },
+          { 'X-Nav-Data-Source': 'stored' }
+        )
+      )
+    })
+
+    await waitFor(() => expect(result.current.syncMode).toBe('cloud'))
+    await waitFor(() => expect(postedPayloads).toHaveLength(1))
+
+    // Phone bookmark must survive, and buffered +2 clicks must merge onto cloud's 2 -> 4
+    expect(result.current.groups[0].bookmarks.map((b) => b.id)).toEqual([
+      'b-1',
+      'b-2',
+      'b-3',
+      'b-phone',
+    ])
+    expect(result.current.groups[0].bookmarks[0].clicks).toBe(4)
+
+    expect(postedPayloads[0].groups[0].bookmarks.map((b) => b.id)).toEqual([
+      'b-1',
+      'b-2',
+      'b-3',
+      'b-phone',
+    ])
+    expect(postedPayloads[0].groups[0].bookmarks[0].clicks).toBe(4)
+  })
+
+  it('reports non-blocking notice and returns false when undo restore fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          { groups: sampleGroups, initialized: false, storage: 'local' },
+          { 'X-Nav-Data-Source': 'disabled' }
+        )
+      )
+    )
+
+    const { result } = renderHook(() => useNavStore())
+    await waitFor(() => expect(result.current.syncMode).toBe('local'))
+
+    const deletedBookmark = structuredClone(result.current.groups[0].bookmarks[0])
+    let restoredBookmark = true
+    let restoredGroup = true
+
+    act(() => {
+      result.current.deleteBookmark('g-vps', 'b-1')
+      result.current.deleteGroup('g-vps')
+      restoredBookmark = result.current.restoreBookmark('g-vps', deletedBookmark, 0)
+    })
+
+    expect(restoredBookmark).toBe(false)
+    expect(result.current.syncNotice).toEqual({
+      message: '没能恢复',
+      retryable: false,
+    })
+    expect(result.current.syncError).toBeNull()
+
+    act(() => {
+      result.current.clearSyncError()
+      restoredGroup = result.current.restoreGroup(sampleGroups[1], 0)
+    })
+
+    expect(restoredGroup).toBe(false)
+    expect(result.current.syncNotice).toEqual({
+      message: '没能恢复',
+      retryable: false,
+    })
+  })
 })

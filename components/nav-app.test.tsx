@@ -699,4 +699,60 @@ describe('NavApp sidebar integration', () => {
       0
     )
   })
+
+  it('keeps UndoToast 6s auto-dismiss timer intact across parent re-renders and resets selectedSearchId when clearing empty search', () => {
+    const groupsWithNotes: Group[] = [
+      {
+        id: 'g-main',
+        name: '主力',
+        order: 0,
+        color: '#3B82F6',
+        bookmarks: [
+          { id: 'bm-1', name: 'Router', url: 'http://192.168.1.1', order: 0, note: '家里主路由' },
+          { id: 'bm-2', name: 'NAS', url: 'http://192.168.1.2', order: 1, note: '家里存储' },
+        ],
+      },
+    ]
+
+    vi.useFakeTimers()
+    try {
+      const store = createStore({ groups: groupsWithNotes, syncing: true })
+      appMocks.useNavStore.mockReturnValue(store)
+
+      const { rerender } = render(<NavApp />)
+
+      // Trigger UndoToast
+      act(() => {
+        latest<SortableGroupProps>(appMocks.sortableGroupProps).onDeleteBookmark('g-main', 'bm-1')
+      })
+      expect(screen.getByText('已删除「Router」')).toBeTruthy()
+
+      // Advance 4s then cause parent re-render (e.g. syncing finishes)
+      act(() => {
+        vi.advanceTimersByTime(4000)
+      })
+      appMocks.useNavStore.mockReturnValue(createStore({ groups: groupsWithNotes, syncing: false }))
+      rerender(<NavApp />)
+
+      // Advancing another 2.5s (total 6.5s) must dismiss toast instead of resetting countdown to 6s
+      act(() => {
+        vi.advanceTimersByTime(2500)
+      })
+      expect(screen.queryByText('已删除「Router」')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+
+    // Empty-search clear button must also reset selectedSearchId
+    const search = screen.getByRole('textbox', { name: '测试搜索' })
+    fireEvent.change(search, { target: { value: '家里' } })
+    fireEvent.keyDown(search, { key: 'ArrowDown' })
+    expect(latest<SortableGroupProps>(appMocks.sortableGroupProps).selectedBookmarkId).toBe('bm-2')
+
+    fireEvent.change(search, { target: { value: '完全不存在' } })
+    fireEvent.click(screen.getByRole('button', { name: '清除搜索' }))
+
+    fireEvent.change(search, { target: { value: '家里' } })
+    expect(latest<SortableGroupProps>(appMocks.sortableGroupProps).selectedBookmarkId).toBe('bm-1')
+  })
 })

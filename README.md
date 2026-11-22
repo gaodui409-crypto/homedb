@@ -63,7 +63,9 @@ BLOB_READ_WRITE_TOKEN=自己的_Vercel_Blob_令牌
 
 Vercel 上的变量在 Project Settings > Environment Variables 管理。修改后需要重新部署才会生效。
 
-**注意：** 本地填入真实 `BLOB_READ_WRITE_TOKEN` 后，本地编辑会同步到线上同一份 Blob 数据。只测试界面时应留空该变量。
+**注意：**
+- 开启 `BLOB_READ_WRITE_TOKEN` 时务必同时配置 `NAV_PASSWORD`，否则 `/api/data` 可被匿名读写。
+- 建议在 Vercel 后台只给 **Production** 勾选 `BLOB_READ_WRITE_TOKEN`，让 Preview / Development 自动回退「仅存本机」，避免预览测试误改正式站数据；本地只测界面时也应留空该变量。
 
 ### 存储边界
 

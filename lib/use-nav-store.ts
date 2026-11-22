@@ -59,6 +59,29 @@ function reindexBookmarks(bookmarks: Bookmark[]): Bookmark[] {
   return bookmarks.map((bookmark, index) => ({ ...bookmark, order: index }))
 }
 
+function applyClickDeltas(
+  groups: Group[],
+  deltas: ReadonlyMap<string, number>
+): { groups: Group[]; applied: boolean } {
+  if (deltas.size === 0) return { groups, applied: false }
+  let applied = false
+  const nextGroups = groups.map((group) => {
+    let groupChanged = false
+    const nextBookmarks = group.bookmarks.map((bookmark) => {
+      const delta = deltas.get(bookmark.id)
+      if (!delta) return bookmark
+      const currentClicks = bookmark.clicks ?? 0
+      const nextClicks = Math.min(MAX_CLICKS, currentClicks + delta)
+      if (nextClicks === currentClicks) return bookmark
+      applied = true
+      groupChanged = true
+      return { ...bookmark, clicks: nextClicks }
+    })
+    return groupChanged ? { ...group, bookmarks: nextBookmarks } : group
+  })
+  return { groups: applied ? nextGroups : groups, applied }
+}
+
 export function useNavStore() {
   const [initialGroupsState] = useState(() => loadStoredGroups())
   const [groups, setGroupsState] = useState<Group[]>(initialGroupsState.groups)
@@ -75,6 +98,7 @@ export function useNavStore() {
   const localStatusRef = useRef(initialGroupsState.status)
   const hasUserMutatedRef = useRef(false)
   const initialCloudResolvedRef = useRef(false)
+  const pendingClicksRef = useRef<Map<string, number>>(new Map())
   const syncModeRef = useRef<SyncMode>('checking')
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncVersionRef = useRef(0)
@@ -240,6 +264,12 @@ export function useNavStore() {
       if (source === 'disabled') {
         initialCloudResolvedRef.current = true
         syncModeRef.current = 'local'
+        const hadPendingClicks = pendingClicksRef.current.size > 0
+        pendingClicksRef.current.clear()
+        if (hadPendingClicks && localStatusRef.current !== 'corrupt') {
+          localStatusRef.current = 'valid'
+          saveGroupsLocal(groupsRef.current)
+        }
         setPendingSync(getBrowserStorage(), false)
         if (!unmountedRef.current) {
           setSyncMode('local')
@@ -274,17 +304,28 @@ export function useNavStore() {
         localCorrupt,
       })
 
+      const bufferedClicks = new Map(pendingClicksRef.current)
+      pendingClicksRef.current.clear()
+
       if (action === 'upload-local') {
         syncToCloud(groupsRef.current, 0)
       } else if (action === 'use-cloud') {
+        const { groups: mergedGroups, applied } = applyClickDeltas(
+          recovered.groups,
+          bufferedClicks
+        )
         localStatusRef.current = 'valid'
-        groupsRef.current = recovered.groups
-        saveGroupsLocal(recovered.groups)
-        setPendingSync(getBrowserStorage(), false)
+        groupsRef.current = mergedGroups
+        saveGroupsLocal(mergedGroups)
         if (!unmountedRef.current) {
-          setGroupsState(recovered.groups)
+          setGroupsState(mergedGroups)
           setSyncError(null)
           setSyncNotice(null)
+        }
+        if (applied) {
+          syncToCloud(mergedGroups, 0)
+        } else {
+          setPendingSync(getBrowserStorage(), false)
         }
       } else {
         setPendingSync(getBrowserStorage(), false)
@@ -337,31 +378,47 @@ export function useNavStore() {
   )
 
   const restoreBookmark = useCallback(
-    (groupId: string, bookmark: Bookmark, index: number) => {
-      setGroups((prev) => {
-        const alreadyExists = prev.some((g) =>
-          g.bookmarks.some((b) => b.id === bookmark.id)
-        )
-        if (alreadyExists) return prev
+    (groupId: string, bookmark: Bookmark, index: number): boolean => {
+      const current = groupsRef.current
+      const alreadyExists = current.some((g) =>
+        g.bookmarks.some((b) => b.id === bookmark.id)
+      )
+      const targetGroup = current.find((g) => g.id === groupId)
+      if (
+        alreadyExists ||
+        !targetGroup ||
+        targetGroup.bookmarks.length >= MAX_BOOKMARKS_PER_GROUP
+      ) {
+        reportError('没能恢复', false, false)
+        return false
+      }
 
-        return prev.map((g) => {
+      setGroups((prev) =>
+        prev.map((g) => {
           if (g.id !== groupId) return g
-          if (g.bookmarks.length >= MAX_BOOKMARKS_PER_GROUP) return g
           const sorted = sortBookmarksByOrder(g.bookmarks)
           const safeIndex = Math.max(0, Math.min(index, sorted.length))
           sorted.splice(safeIndex, 0, bookmark)
           return { ...g, bookmarks: reindexBookmarks(sorted) }
         })
-      })
+      )
+      return true
     },
-    [setGroups]
+    [reportError, setGroups]
   )
 
   const restoreGroup = useCallback(
-    (group: Group, index: number) => {
+    (group: Group, index: number): boolean => {
+      const current = groupsRef.current
+      if (current.length >= MAX_GROUPS || current.some((g) => g.id === group.id)) {
+        reportError('没能恢复', false, false)
+        return false
+      }
+
       setGroups((prev) => {
-        if (prev.length >= MAX_GROUPS) return prev
-        if (prev.some((g) => g.id === group.id)) return prev
+        if (prev.length >= MAX_GROUPS || prev.some((g) => g.id === group.id)) {
+          return prev
+        }
 
         const existingBookmarkIds = new Set<string>()
         for (const g of prev) {
@@ -379,8 +436,9 @@ export function useNavStore() {
         sorted.splice(safeIndex, 0, { ...group, bookmarks: safeBookmarks })
         return reindexGroups(sorted)
       })
+      return true
     },
-    [setGroups]
+    [reportError, setGroups]
   )
 
   const setTheme = useCallback((nextTheme: Theme) => {
@@ -635,14 +693,19 @@ export function useNavStore() {
           ),
         }))
 
-      // On uninitialized/corrupt local fallback before cloud resolves, never promote DEFAULT_DATA to pending upload
-      if (
-        !initialCloudResolvedRef.current &&
-        (localStatusRef.current === 'missing' || localStatusRef.current === 'corrupt')
-      ) {
+      // Before initial cloud handshake completes, never mark stale/fallback local data as pending upload.
+      // Buffer click deltas and merge them onto cloud data once fetched so fresh edits from other devices survive.
+      if (!initialCloudResolvedRef.current) {
+        pendingClicksRef.current.set(
+          bookmarkId,
+          (pendingClicksRef.current.get(bookmarkId) ?? 0) + 1
+        )
         const next = increment(groupsRef.current)
         groupsRef.current = next
         setGroupsState(next)
+        if (localStatusRef.current === 'valid') {
+          saveGroupsLocal(next)
+        }
         return
       }
 
