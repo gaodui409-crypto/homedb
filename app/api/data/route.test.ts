@@ -48,12 +48,17 @@ describe('/api/data cloud behavior', () => {
     delete process.env.BLOB_READ_WRITE_TOKEN
   })
 
-  function authorizedRequest(method = 'GET', body?: unknown) {
+  function authorizedRequest(
+    method = 'GET',
+    body?: unknown,
+    extraHeaders: Record<string, string> = {}
+  ) {
     return new NextRequest('http://localhost/api/data', {
       method,
       headers: {
         Authorization: `Bearer ${createToken(password)}`,
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...extraHeaders,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
@@ -138,12 +143,78 @@ describe('/api/data cloud behavior', () => {
     expect(put).not.toHaveBeenCalled()
   })
 
-  it('writes valid navigation data', async () => {
-    vi.mocked(put).mockResolvedValueOnce({ url: 'https://example.blob/nav-data.json' } as never)
+  it('writes valid navigation data with a matching ETag condition', async () => {
+    vi.mocked(put).mockResolvedValueOnce({
+      url: 'https://example.blob/nav-data.json',
+      etag: 'etag-v2',
+    } as never)
 
-    const response = await POST(authorizedRequest('POST', { groups: DEFAULT_DATA }))
+    const response = await POST(
+      authorizedRequest('POST', { groups: DEFAULT_DATA }, { 'If-Match': 'etag-v1' })
+    )
 
     expect(response.status).toBe(200)
-    expect(put).toHaveBeenCalledOnce()
+    expect(response.headers.get('X-Nav-Data-Etag')).toBe('etag-v2')
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      etag: 'etag-v2',
+    })
+    expect(put).toHaveBeenCalledWith(
+      'nav-data.json',
+      expect.any(String),
+      expect.objectContaining({
+        access: 'private',
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        ifMatch: 'etag-v1',
+      })
+    )
+  })
+
+  it('rejects unconditional writes missing If-Match / If-None-Match or using wildcard If-Match', async () => {
+    const missingCondition = await POST(
+      authorizedRequest('POST', { groups: DEFAULT_DATA })
+    )
+    expect(missingCondition.status).toBe(428)
+
+    const wildcardMatch = await POST(
+      authorizedRequest('POST', { groups: DEFAULT_DATA }, { 'If-Match': '*' })
+    )
+    expect(wildcardMatch.status).toBe(400)
+    expect(put).not.toHaveBeenCalled()
+  })
+
+  it('returns 412 conflict on ETag mismatch or create-only race instead of overwriting', async () => {
+    const preconditionErr = Object.assign(
+      new Error('Vercel Blob: Precondition failed: ETag mismatch.'),
+      { name: 'BlobPreconditionFailedError' }
+    )
+    vi.mocked(put).mockRejectedValueOnce(preconditionErr)
+
+    const mismatchRes = await POST(
+      authorizedRequest('POST', { groups: DEFAULT_DATA }, { 'If-Match': 'stale-etag' })
+    )
+    expect(mismatchRes.status).toBe(412)
+    await expect(mismatchRes.json()).resolves.toMatchObject({
+      success: false,
+      conflict: true,
+    })
+
+    vi.mocked(put).mockRejectedValueOnce(
+      new Error('Vercel Blob: This blob already exists')
+    )
+    const createRaceRes = await POST(
+      authorizedRequest('POST', { groups: DEFAULT_DATA }, { 'If-None-Match': '*' })
+    )
+    expect(createRaceRes.status).toBe(412)
+    expect(put).toHaveBeenLastCalledWith(
+      'nav-data.json',
+      expect.any(String),
+      expect.objectContaining({
+        access: 'private',
+        addRandomSuffix: false,
+        allowOverwrite: false,
+      })
+    )
   })
 })

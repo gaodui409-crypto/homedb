@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { loadStoredGroups } from '@/lib/storage'
+import { useNavStore } from '@/lib/use-nav-store'
 import {
   BackgroundModal,
   BookmarkModal,
@@ -87,6 +89,83 @@ describe('BookmarkModal', () => {
 
     await user.keyboard('{Escape}')
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('HDB-004: rejects Unicode URLs and custom icon URLs whose percent-encoded length exceeds 2048, preserving form state', async () => {
+    localStorage.clear()
+    localStorage.setItem('mininav_data', JSON.stringify({ groups }))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ groups, initialized: false, storage: 'local' }),
+          { status: 200, headers: { 'X-Nav-Data-Source': 'disabled' } }
+        )
+      )
+    )
+
+    try {
+      const hook = renderHook(() => useNavStore())
+      await waitFor(() => expect(hook.result.current.syncMode).toBe('local'))
+
+      const rawUnicodeUrl = 'https://example.test/' + '字'.repeat(230)
+      expect(rawUnicodeUrl.length).toBeLessThan(2048)
+
+      const onClose = vi.fn()
+      const onSave = vi.fn((groupId, name, url, icon, _newGroup, note) => {
+        hook.result.current.addBookmark(groupId, name, url, icon, note)
+      })
+
+      const view = render(
+        <BookmarkModal
+          state={{ groupId: 'g-1' }}
+          groups={hook.result.current.groups}
+          onSave={onSave}
+          onClose={onClose}
+        />
+      )
+
+      const nameInput = screen.getByLabelText('名称') as HTMLInputElement
+      const urlInput = screen.getByLabelText('网址') as HTMLInputElement
+      const iconInput = screen.getByLabelText('图标（选填）') as HTMLInputElement
+
+      fireEvent.change(nameInput, { target: { value: 'Unicode URL' } })
+      fireEvent.change(urlInput, { target: { value: rawUnicodeUrl } })
+      fireEvent.submit(view.container.querySelector('form')!)
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+      expect(screen.getByRole('alert').textContent).toContain('网址编码后过长')
+      expect(urlInput.getAttribute('aria-invalid')).toBe('true')
+      expect(nameInput.value).toBe('Unicode URL')
+      expect(urlInput.value).toBe(rawUnicodeUrl)
+
+      // Fix main URL, test overlong Unicode custom icon URL as well
+      fireEvent.change(urlInput, { target: { value: 'https://example.test/ok' } })
+      expect(urlInput.getAttribute('aria-invalid')).toBeNull()
+
+      fireEvent.change(iconInput, { target: { value: rawUnicodeUrl } })
+      fireEvent.submit(view.container.querySelector('form')!)
+
+      expect(onSave).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+      expect(screen.getByRole('alert').textContent).toContain('图标网址编码后过长')
+      expect(iconInput.getAttribute('aria-invalid')).toBe('true')
+
+      // Clear icon and submit valid bookmark -> persists cleanly across reload
+      fireEvent.change(iconInput, { target: { value: '' } })
+      act(() => {
+        fireEvent.submit(view.container.querySelector('form')!)
+      })
+
+      expect(onSave).toHaveBeenCalledTimes(1)
+      const reloaded = loadStoredGroups()
+      expect(reloaded.status).toBe('valid')
+      expect(reloaded.groups[0].bookmarks.map((b) => b.name)).toContain('Unicode URL')
+    } finally {
+      vi.unstubAllGlobals()
+      localStorage.clear()
+    }
   })
 })
 

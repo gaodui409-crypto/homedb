@@ -79,7 +79,7 @@ Vercel 上的变量在 Project Settings > Environment Variables 管理。修改�
 
 ## 导入与导出
 
-导入文件不能超过 1 MB，顶层必须是包含 `groups` 数组的 JSON 对象。最简格式：
+导入与导出共享同一备份容量上限（384 MB，覆盖 100 组 × 500 条书签的最大合法规模），顶层必须是包含 `groups` 数组的 JSON 对象。最简格式：
 
 ```json
 {
@@ -106,7 +106,7 @@ Vercel 上的变量在 Project Settings > Environment Variables 管理。修改�
 
 ### 导入错误含义
 
-- `文件不能超过 1 MB`：导入文件超出大小限制。
+- `文件不能超过 384 MB`：导入文件超出备份大小上限。
 - `不是有效的 JSON 文件`：文件语法不是合法 JSON，常见原因是多余逗号、引号不匹配、注释或编码问题。
 - `书签格式不对，请检查分组名、名称和网址`：JSON 语法正确，但不符合数据结构，优先检查顶层 `groups`、分组名、书签名和完整 HTTP/HTTPS 网址。
 

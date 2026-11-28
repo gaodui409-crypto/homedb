@@ -4,11 +4,15 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { v4 as uuid } from 'uuid'
 import type { Group, Bookmark, Theme, NavData, BackgroundSetting } from './types'
 import {
+  MAX_BACKUP_FILE_BYTES,
+  MAX_BACKUP_FILE_MB,
   MAX_BOOKMARKS_PER_GROUP,
   MAX_CLICKS,
   MAX_GROUPS,
+  bookmarkSchema,
   importNavDataSchema,
   mergeNavGroups,
+  normalizeHttpUrl,
   normalizeImportData,
   salvageNavData,
   type ImportNavData,
@@ -28,9 +32,12 @@ import {
   setToken,
 } from './storage'
 import {
+  CLOUD_MISSING_SENTINEL,
   decideInitialSync,
+  getStoredCloudEtag,
   hasPendingSync,
   setPendingSync,
+  setStoredCloudEtag,
   type CloudDataSource,
 } from './sync-policy'
 
@@ -41,6 +48,42 @@ export type SyncMode = 'checking' | 'cloud' | 'local'
 export interface SyncNotice {
   message: string
   retryable: boolean
+}
+
+type CloudBaseline =
+  | { kind: 'unknown' }
+  | { kind: 'missing' }
+  | { kind: 'etag'; etag: string }
+  | { kind: 'unversioned' }
+
+const DATA_ETAG_HEADER = 'X-Nav-Data-Etag'
+const MAX_CONFLICT_RETRIES = 3
+
+function loadInitialCloudBaseline(): CloudBaseline {
+  const stored = getStoredCloudEtag(getBrowserStorage())
+  if (!stored) return { kind: 'unknown' }
+  if (stored === CLOUD_MISSING_SENTINEL) return { kind: 'missing' }
+  return { kind: 'etag', etag: stored }
+}
+
+function persistCloudBaseline(baseline: CloudBaseline): void {
+  const storage = getBrowserStorage()
+  if (baseline.kind === 'etag') {
+    setStoredCloudEtag(storage, baseline.etag)
+  } else if (baseline.kind === 'missing') {
+    setStoredCloudEtag(storage, CLOUD_MISSING_SENTINEL)
+  } else if (baseline.kind === 'unversioned') {
+    setStoredCloudEtag(storage, null)
+  }
+}
+
+function extractResponseEtag(res: Response, body?: { etag?: unknown } | null): string | null {
+  const headerEtag = res.headers.get(DATA_ETAG_HEADER)?.trim()
+  if (headerEtag) return headerEtag
+  if (body && typeof body.etag === 'string' && body.etag.trim()) {
+    return body.etag.trim()
+  }
+  return null
 }
 
 function sortGroupsByOrder(groups: Group[]): Group[] {
@@ -116,11 +159,20 @@ export function useNavStore() {
   const initialCloudResolvedRef = useRef(false)
   const pendingClicksRef = useRef<Map<string, number>>(new Map())
   const pendingCollapseRef = useRef<Map<string, boolean>>(new Map())
+  const uncommittedClicksRef = useRef<Map<string, number>>(new Map())
+  const uncommittedCollapseRef = useRef<Map<string, boolean>>(new Map())
+  const hasUncommittedStructuralEditRef = useRef<boolean>(
+    initialGroupsState.status !== 'missing' &&
+      initialGroupsState.status !== 'corrupt' &&
+      hasPendingSync(getBrowserStorage())
+  )
+  const cloudBaselineRef = useRef<CloudBaseline>(loadInitialCloudBaseline())
   const adminModeRef = useRef(false)
   const syncErrorRef = useRef<string | null>(null)
   const syncModeRef = useRef<SyncMode>('checking')
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const syncVersionRef = useRef(0)
+  const lastSyncedVersionRef = useRef(0)
   const activeSyncCountRef = useRef(0)
   const writeChainRef = useRef<Promise<void>>(Promise.resolve())
   const unmountedRef = useRef(false)
@@ -168,7 +220,7 @@ export function useNavStore() {
   }, [])
 
   const syncToCloud = useCallback(
-    (data: Group[], delay = 500) => {
+    (_data: Group[], delay = 500) => {
       if (syncModeRef.current === 'local') {
         setPendingSync(getBrowserStorage(), false)
         return
@@ -185,13 +237,92 @@ export function useNavStore() {
         syncTimeoutRef.current = null
       }
 
-      const version = ++syncVersionRef.current
+      const scheduledVersion = ++syncVersionRef.current
       setPendingSync(getBrowserStorage(), true)
+
+      const consumeSyncedDeltas = (
+        sentClicks: ReadonlyMap<string, number>,
+        sentCollapses: ReadonlyMap<string, boolean>
+      ) => {
+        for (const [bookmarkId, delta] of sentClicks) {
+          const remaining = (uncommittedClicksRef.current.get(bookmarkId) ?? 0) - delta
+          if (remaining > 0) {
+            uncommittedClicksRef.current.set(bookmarkId, remaining)
+          } else {
+            uncommittedClicksRef.current.delete(bookmarkId)
+          }
+        }
+        for (const [groupId, collapsedVal] of sentCollapses) {
+          if (uncommittedCollapseRef.current.get(groupId) === collapsedVal) {
+            uncommittedCollapseRef.current.delete(groupId)
+          }
+        }
+      }
+
+      const markLocalMode = () => {
+        syncModeRef.current = 'local'
+        syncErrorRef.current = null
+        uncommittedClicksRef.current.clear()
+        uncommittedCollapseRef.current.clear()
+        hasUncommittedStructuralEditRef.current = false
+        setStoredCloudEtag(getBrowserStorage(), null)
+        setPendingSync(getBrowserStorage(), false)
+        if (!unmountedRef.current) {
+          setSyncMode('local')
+          setSyncError(null)
+          setSyncNotice(null)
+        }
+      }
+
+      const markCloudClean = (completedVersion: number) => {
+        lastSyncedVersionRef.current = Math.max(
+          lastSyncedVersionRef.current,
+          completedVersion
+        )
+        syncModeRef.current = 'cloud'
+        syncErrorRef.current = null
+        if (!unmountedRef.current) {
+          setSyncMode('cloud')
+          setSyncError(null)
+          setSyncNotice(null)
+        }
+        if (completedVersion === syncVersionRef.current) {
+          hasUncommittedStructuralEditRef.current = false
+          setPendingSync(getBrowserStorage(), false)
+        }
+      }
+
+      const buildConditionHeaders = (): Record<string, string> => {
+        const baseline = cloudBaselineRef.current
+        if (baseline.kind === 'etag') {
+          return { 'If-Match': baseline.etag }
+        }
+        if (baseline.kind === 'missing') {
+          return { 'If-None-Match': '*' }
+        }
+        return {}
+      }
+
+      const postGroups = async (payloadGroups: Group[]) => {
+        const token = getToken()
+        return fetch('/api/data', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...buildConditionHeaders(),
+          },
+          body: JSON.stringify({ groups: payloadGroups }),
+        })
+      }
 
       syncTimeoutRef.current = setTimeout(() => {
         syncTimeoutRef.current = null
         writeChainRef.current = writeChainRef.current.then(async () => {
           if (syncModeRef.current === 'local' || !initialCloudResolvedRef.current) {
+            return
+          }
+          if (lastSyncedVersionRef.current >= scheduledVersion) {
             return
           }
 
@@ -201,15 +332,10 @@ export function useNavStore() {
           }
 
           try {
-            const token = getToken()
-            const res = await fetch('/api/data', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                ...(token ? { Authorization: `Bearer ${token}` } : {}),
-              },
-              body: JSON.stringify({ groups: data }),
-            })
+            const attemptVersion = syncVersionRef.current
+            const sentClicks = new Map(uncommittedClicksRef.current)
+            const sentCollapses = new Map(uncommittedCollapseRef.current)
+            const res = await postGroups(groupsRef.current)
 
             if (res.status === 401) {
               clearToken()
@@ -217,10 +343,129 @@ export function useNavStore() {
               return
             }
 
+            if (res.status === 409 || res.status === 412) {
+              if (hasUncommittedStructuralEditRef.current) {
+                setPendingSync(getBrowserStorage(), false)
+                reportError('云端已有新修改，请先导出备份再刷新', false)
+                return
+              }
+
+              for (let retry = 0; retry < MAX_CONFLICT_RETRIES; retry += 1) {
+                const token = getToken()
+                const getRes = await fetch('/api/data', {
+                  headers: token ? { Authorization: `Bearer ${token}` } : {},
+                })
+
+                if (getRes.status === 401) {
+                  clearToken()
+                  reportError('登录已过期，请刷新重登', false)
+                  return
+                }
+                if (!getRes.ok) {
+                  throw new Error('Failed to refresh cloud data')
+                }
+
+                const remoteSource = getRes.headers.get(
+                  'X-Nav-Data-Source'
+                ) as CloudDataSource | null
+                if (remoteSource === 'disabled') {
+                  markLocalMode()
+                  return
+                }
+                if (remoteSource !== 'stored' && remoteSource !== 'missing') {
+                  throw new Error('Invalid cloud source')
+                }
+
+                const rawRemote = (await getRes.json()) as { etag?: unknown }
+                const recovered = salvageNavData(rawRemote)
+                if (!recovered) {
+                  throw new Error('Invalid cloud data')
+                }
+
+                const remoteEtag = extractResponseEtag(getRes, rawRemote)
+                const nextBaseline: CloudBaseline =
+                  remoteSource === 'missing'
+                    ? { kind: 'missing' }
+                    : remoteEtag
+                      ? { kind: 'etag', etag: remoteEtag }
+                      : { kind: 'unversioned' }
+                cloudBaselineRef.current = nextBaseline
+                persistCloudBaseline(nextBaseline)
+
+                if (hasUncommittedStructuralEditRef.current) {
+                  setPendingSync(getBrowserStorage(), false)
+                  reportError('云端已有新修改，请先导出备份再刷新', false)
+                  return
+                }
+
+                const mergeVersion = syncVersionRef.current
+                const mergeClicks = new Map(uncommittedClicksRef.current)
+                const mergeCollapses = new Map(uncommittedCollapseRef.current)
+                const afterClicks = applyClickDeltas(recovered.groups, mergeClicks)
+                const afterCollapses = applyCollapseOverrides(
+                  afterClicks.groups,
+                  mergeCollapses
+                )
+                const mergedGroups = afterCollapses.groups
+                const applied = afterClicks.applied || afterCollapses.applied
+
+                localStatusRef.current = 'valid'
+                groupsRef.current = mergedGroups
+                saveGroupsLocal(mergedGroups)
+                if (!unmountedRef.current) {
+                  setGroupsState(mergedGroups)
+                }
+
+                if (!applied) {
+                  consumeSyncedDeltas(mergeClicks, mergeCollapses)
+                  markCloudClean(mergeVersion)
+                  return
+                }
+
+                const retryRes = await postGroups(mergedGroups)
+                if (retryRes.status === 401) {
+                  clearToken()
+                  reportError('登录已过期，请刷新重登', false)
+                  return
+                }
+                if (retryRes.status === 409 || retryRes.status === 412) {
+                  continue
+                }
+
+                const retryResult = (await retryRes.json()) as {
+                  success?: boolean
+                  local?: boolean
+                  error?: string
+                  etag?: string
+                }
+                if (!retryRes.ok || !retryResult.success) {
+                  throw new Error(retryResult.error || 'Cloud sync failed')
+                }
+                if (retryResult.local) {
+                  markLocalMode()
+                  return
+                }
+
+                const savedEtag = extractResponseEtag(retryRes, retryResult)
+                if (savedEtag) {
+                  const savedBaseline: CloudBaseline = { kind: 'etag', etag: savedEtag }
+                  cloudBaselineRef.current = savedBaseline
+                  persistCloudBaseline(savedBaseline)
+                }
+                consumeSyncedDeltas(mergeClicks, mergeCollapses)
+                markCloudClean(mergeVersion)
+                return
+              }
+
+              reportError('云端同步繁忙，请稍后重试', true)
+              return
+            }
+
             const result = (await res.json()) as {
               success?: boolean
               local?: boolean
               error?: string
+              etag?: string
             }
 
             if (!res.ok || !result.success) {
@@ -228,28 +473,18 @@ export function useNavStore() {
             }
 
             if (result.local) {
-              syncModeRef.current = 'local'
-              syncErrorRef.current = null
-              setPendingSync(getBrowserStorage(), false)
-              if (!unmountedRef.current) {
-                setSyncMode('local')
-                setSyncError(null)
-                setSyncNotice(null)
-              }
+              markLocalMode()
               return
             }
 
-            syncModeRef.current = 'cloud'
-            syncErrorRef.current = null
-            if (!unmountedRef.current) {
-              setSyncMode('cloud')
-              setSyncError(null)
-              setSyncNotice(null)
+            const nextEtag = extractResponseEtag(res, result)
+            if (nextEtag) {
+              const savedBaseline: CloudBaseline = { kind: 'etag', etag: nextEtag }
+              cloudBaselineRef.current = savedBaseline
+              persistCloudBaseline(savedBaseline)
             }
-
-            if (version === syncVersionRef.current) {
-              setPendingSync(getBrowserStorage(), false)
-            }
+            consumeSyncedDeltas(sentClicks, sentCollapses)
+            markCloudClean(attemptVersion)
           } catch {
             reportError('云端同步失败', true)
           } finally {
@@ -291,7 +526,8 @@ export function useNavStore() {
         return
       }
 
-      const recovered = salvageNavData(await res.json())
+      const rawJson = (await res.json()) as { etag?: unknown }
+      const recovered = salvageNavData(rawJson)
       if (!recovered) {
         throw new Error('Invalid cloud data')
       }
@@ -304,6 +540,10 @@ export function useNavStore() {
           pendingClicksRef.current.size > 0 || pendingCollapseRef.current.size > 0
         pendingClicksRef.current.clear()
         pendingCollapseRef.current.clear()
+        uncommittedClicksRef.current.clear()
+        uncommittedCollapseRef.current.clear()
+        hasUncommittedStructuralEditRef.current = false
+        setStoredCloudEtag(getBrowserStorage(), null)
         if (hadPendingViewActions && localStatusRef.current !== 'corrupt') {
           localStatusRef.current = 'valid'
           saveGroupsLocal(groupsRef.current)
@@ -319,6 +559,14 @@ export function useNavStore() {
         }
         return
       }
+
+      const remoteEtag = extractResponseEtag(res, rawJson)
+      const remoteBaseline: CloudBaseline =
+        source === 'missing'
+          ? { kind: 'missing' }
+          : remoteEtag
+            ? { kind: 'etag', etag: remoteEtag }
+            : { kind: 'unversioned' }
 
       initialCloudResolvedRef.current = true
       syncModeRef.current = 'cloud'
@@ -349,8 +597,32 @@ export function useNavStore() {
       pendingCollapseRef.current.clear()
 
       if (action === 'upload-local') {
+        if (source === 'missing') {
+          cloudBaselineRef.current = { kind: 'missing' }
+          persistCloudBaseline({ kind: 'missing' })
+        } else if (cloudBaselineRef.current.kind === 'unknown') {
+          cloudBaselineRef.current =
+            remoteBaseline.kind === 'unversioned'
+              ? { kind: 'unversioned' }
+              : { kind: 'missing' }
+        }
+        for (const [bookmarkId, delta] of bufferedClicks) {
+          uncommittedClicksRef.current.set(
+            bookmarkId,
+            (uncommittedClicksRef.current.get(bookmarkId) ?? 0) + delta
+          )
+        }
+        for (const [groupId, collapsedVal] of bufferedCollapses) {
+          uncommittedCollapseRef.current.set(groupId, collapsedVal)
+        }
         syncToCloud(groupsRef.current, 0)
       } else if (action === 'use-cloud') {
+        cloudBaselineRef.current = remoteBaseline
+        persistCloudBaseline(remoteBaseline)
+        hasUncommittedStructuralEditRef.current = false
+        uncommittedClicksRef.current.clear()
+        uncommittedCollapseRef.current.clear()
+
         const afterClicks = applyClickDeltas(recovered.groups, bufferedClicks)
         const afterCollapses = applyCollapseOverrides(
           afterClicks.groups,
@@ -367,6 +639,12 @@ export function useNavStore() {
           setSyncNotice(null)
         }
         if (applied) {
+          for (const [bookmarkId, delta] of bufferedClicks) {
+            uncommittedClicksRef.current.set(bookmarkId, delta)
+          }
+          for (const [groupId, collapsedVal] of bufferedCollapses) {
+            uncommittedCollapseRef.current.set(groupId, collapsedVal)
+          }
           syncToCloud(mergedGroups, 0)
         } else {
           setPendingSync(getBrowserStorage(), false)
@@ -401,6 +679,7 @@ export function useNavStore() {
     (updater: Group[] | ((prev: Group[]) => Group[])) => {
       const next = typeof updater === 'function' ? updater(groupsRef.current) : updater
       hasUserMutatedRef.current = true
+      hasUncommittedStructuralEditRef.current = true
       localStatusRef.current = 'valid'
       groupsRef.current = next
       setGroupsState(next)
@@ -560,17 +839,36 @@ export function useNavStore() {
         reportError(`单组书签最多 ${MAX_BOOKMARKS_PER_GROUP} 个`, false, false)
         return
       }
+      const trimmedUrl = url.trim()
+      const finalUrl = /^https?:\/\//i.test(trimmedUrl)
+        ? trimmedUrl
+        : (normalizeHttpUrl(trimmedUrl) ?? trimmedUrl)
+      const rawIcon = icon?.trim() || undefined
+      const finalIcon =
+        !rawIcon || rawIcon.startsWith('builtin:')
+          ? rawIcon
+          : /^https?:\/\//i.test(rawIcon)
+            ? rawIcon
+            : (normalizeHttpUrl(rawIcon) ?? rawIcon)
+      const candidate: Bookmark = {
+        id: uuid(),
+        name: name.trim(),
+        url: finalUrl,
+        order: 0,
+        icon: finalIcon,
+        note: note?.trim() || undefined,
+      }
+      if (!bookmarkSchema.safeParse(candidate).success) {
+        reportError('书签信息格式不对或网址编码后过长', false, false)
+        return
+      }
       setGroups((prev) =>
         prev.map((g) => {
           if (g.id !== groupId) return g
           const sorted = sortBookmarksByOrder(g.bookmarks)
           const bm: Bookmark = {
-            id: uuid(),
-            name: name.trim(),
-            url,
+            ...candidate,
             order: sorted.length,
-            icon: icon?.trim() || undefined,
-            note: note?.trim() || undefined,
           }
           return { ...g, bookmarks: reindexBookmarks([...sorted, bm]) }
         })
@@ -590,8 +888,31 @@ export function useNavStore() {
       note?: string
     ) => {
       const trimmedName = name.trim()
-      const iconVal = icon?.trim() || undefined
+      const trimmedUrl = url.trim()
+      const finalUrl = /^https?:\/\//i.test(trimmedUrl)
+        ? trimmedUrl
+        : (normalizeHttpUrl(trimmedUrl) ?? trimmedUrl)
+      const rawIcon = icon?.trim() || undefined
+      const iconVal =
+        !rawIcon || rawIcon.startsWith('builtin:')
+          ? rawIcon
+          : /^https?:\/\//i.test(rawIcon)
+            ? rawIcon
+            : (normalizeHttpUrl(rawIcon) ?? rawIcon)
       const noteVal = note?.trim() || undefined
+
+      const candidateCheck = bookmarkSchema.safeParse({
+        id: bookmarkId,
+        name: trimmedName,
+        url: finalUrl,
+        order: 0,
+        icon: iconVal,
+        note: noteVal,
+      })
+      if (!candidateCheck.success) {
+        reportError('书签信息格式不对或网址编码后过长', false, false)
+        return
+      }
 
       if (newGroupId && newGroupId !== groupId) {
         const destGroup = groupsRef.current.find((g) => g.id === newGroupId)
@@ -609,7 +930,7 @@ export function useNavStore() {
               ...g,
               bookmarks: g.bookmarks.map((b) =>
                 b.id === bookmarkId
-                  ? { ...b, name: trimmedName, url, icon: iconVal, note: noteVal }
+                  ? { ...b, name: trimmedName, url: finalUrl, icon: iconVal, note: noteVal }
                   : b
               ),
             }
@@ -622,7 +943,7 @@ export function useNavStore() {
           const sorted = sortBookmarksByOrder(g.bookmarks)
           const bm = sorted.find((b) => b.id === bookmarkId)
           if (bm) {
-            movedBm = { ...bm, name: trimmedName, url, icon: iconVal, note: noteVal }
+            movedBm = { ...bm, name: trimmedName, url: finalUrl, icon: iconVal, note: noteVal }
           }
           return {
             ...g,
@@ -753,17 +1074,32 @@ export function useNavStore() {
         return
       }
 
-      setGroups(increment)
+      uncommittedClicksRef.current.set(
+        bookmarkId,
+        (uncommittedClicksRef.current.get(bookmarkId) ?? 0) + 1
+      )
+      const next = increment(groupsRef.current)
+      hasUserMutatedRef.current = true
+      localStatusRef.current = 'valid'
+      groupsRef.current = next
+      setGroupsState(next)
+
+      const savedLocally = saveGroupsLocal(next)
+      if (!savedLocally) {
+        reportError('浏览器存储已满，请先导出备份', false, false)
+      }
+      syncToCloud(next)
     },
-    [setGroups]
+    [reportError, syncToCloud]
   )
 
   const toggleGroupCollapsed = useCallback(
     (groupId: string) => {
+      const target = groupsRef.current.find((g) => g.id === groupId)
+      if (!target) return
+      const nextCollapsed = !target.collapsed
+
       if (!initialCloudResolvedRef.current) {
-        const target = groupsRef.current.find((g) => g.id === groupId)
-        if (!target) return
-        const nextCollapsed = !target.collapsed
         pendingCollapseRef.current.set(groupId, nextCollapsed)
         const next = groupsRef.current.map((g) =>
           g.id === groupId ? { ...g, collapsed: nextCollapsed } : g
@@ -776,11 +1112,22 @@ export function useNavStore() {
         return
       }
 
-      setGroups((prev) =>
-        prev.map((g) => (g.id === groupId ? { ...g, collapsed: !g.collapsed } : g))
+      uncommittedCollapseRef.current.set(groupId, nextCollapsed)
+      const next = groupsRef.current.map((g) =>
+        g.id === groupId ? { ...g, collapsed: nextCollapsed } : g
       )
+      hasUserMutatedRef.current = true
+      localStatusRef.current = 'valid'
+      groupsRef.current = next
+      setGroupsState(next)
+
+      const savedLocally = saveGroupsLocal(next)
+      if (!savedLocally) {
+        reportError('浏览器存储已满，请先导出备份', false, false)
+      }
+      syncToCloud(next)
     },
-    [setGroups]
+    [reportError, syncToCloud]
   )
 
   const togglePinBookmark = useCallback(
@@ -811,13 +1158,17 @@ export function useNavStore() {
     }))
     const data: NavData = { groups: orderedGroups }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    if (blob.size > MAX_BACKUP_FILE_BYTES) {
+      reportError(`备份不能超过 ${MAX_BACKUP_FILE_MB} MB`, false, false)
+      return
+    }
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
     a.download = 'mininav-export.json'
     a.click()
     URL.revokeObjectURL(url)
-  }, [])
+  }, [reportError])
 
   const importData = useCallback(
     (data: ImportNavData, mode: 'overwrite' | 'merge') => {

@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
 import { createRef, type RefObject } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { MAX_BACKUP_FILE_BYTES, MAX_BACKUP_FILE_MB, navDataSchema } from '@/lib/nav-schema'
+import { useNavStore } from '@/lib/use-nav-store'
 import { NavHeader } from './nav-header'
 
 type HeaderProps = React.ComponentProps<typeof NavHeader>
@@ -320,6 +322,80 @@ describe('NavHeader search', () => {
     fireEvent.keyDown(search, { key: 'Enter', isComposing: false, keyCode: 13 })
     expect(onSearchKeyDown).toHaveBeenCalledTimes(1)
   })
+
+  it('HDB-003: exits mobile-only search overlay and restores desktop toolbar while preserving search query when viewport crosses md breakpoint', () => {
+    const previousInnerWidth = window.innerWidth
+    try {
+      Object.defineProperty(window, 'innerWidth', {
+        value: 390,
+        writable: true,
+        configurable: true,
+      })
+      const onSearchChange = vi.fn()
+      const onMobileSearchOpenChange = vi.fn()
+      const view = render(
+        <NavHeader
+          title="HomeDB"
+          theme="light"
+          adminMode
+          searchQuery="vps"
+          onSearchChange={onSearchChange}
+          onMobileSearchOpenChange={onMobileSearchOpenChange}
+          onThemeChange={vi.fn()}
+          onTitleChange={vi.fn()}
+          onAdminToggle={vi.fn()}
+          onAddGroup={vi.fn()}
+          onExport={vi.fn()}
+          onImportFile={vi.fn()}
+          onOpenBackground={vi.fn()}
+        />
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: '打开搜索' }))
+      expect(onMobileSearchOpenChange).toHaveBeenCalledWith(true)
+
+      view.rerender(
+        <NavHeader
+          title="HomeDB"
+          theme="light"
+          adminMode
+          mobileSearchOpen
+          searchQuery="vps"
+          onSearchChange={onSearchChange}
+          onMobileSearchOpenChange={onMobileSearchOpenChange}
+          onThemeChange={vi.fn()}
+          onTitleChange={vi.fn()}
+          onAdminToggle={vi.fn()}
+          onAddGroup={vi.fn()}
+          onExport={vi.fn()}
+          onImportFile={vi.fn()}
+          onOpenBackground={vi.fn()}
+        />
+      )
+      expect(screen.getByRole('searchbox', { name: '手机搜索书签' })).toBeTruthy()
+
+      Object.defineProperty(window, 'innerWidth', {
+        value: 1024,
+        writable: true,
+        configurable: true,
+      })
+      fireEvent(window, new Event('resize'))
+
+      expect(onMobileSearchOpenChange).toHaveBeenLastCalledWith(false)
+      expect(onSearchChange).not.toHaveBeenCalledWith('')
+      expect(view.container.querySelector('[data-mobile-search]')).toBeNull()
+      expect(
+        (screen.getByRole('searchbox', { name: '搜索书签' }) as HTMLInputElement).value
+      ).toBe('vps')
+      expect(screen.getByRole('button', { name: '退出管理模式' })).toBeTruthy()
+    } finally {
+      Object.defineProperty(window, 'innerWidth', {
+        value: previousInnerWidth,
+        writable: true,
+        configurable: true,
+      })
+    }
+  })
 })
 
 describe('NavHeader data import', () => {
@@ -366,5 +442,104 @@ describe('NavHeader data import', () => {
     ], 'incompatible.json', { type: 'application/json' }))
 
     expect(alertSpy).toHaveBeenCalledWith('书签格式不对，请检查分组名、名称和网址')
+    alertSpy.mockRestore()
+  })
+
+  it('HDB-002: imports a >1 MB valid backup exported by exportData and still enforces the shared maximum size ceiling', async () => {
+    const largeGroups = Array.from({ length: 2 }, (_, g) => ({
+      id: `g${g}`,
+      name: `Group ${g}`,
+      color: '#123456',
+      order: g,
+      bookmarks: Array.from({ length: 400 }, (_, b) => ({
+        id: `g${g}b${b}`,
+        name: `Bookmark ${b}`,
+        url: 'https://example.test/',
+        order: b,
+        note: '字'.repeat(500),
+      })),
+    }))
+    expect(navDataSchema.safeParse({ groups: largeGroups }).success).toBe(true)
+
+    localStorage.clear()
+    localStorage.setItem('mininav_data', JSON.stringify({ groups: largeGroups }))
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ groups: largeGroups, initialized: false, storage: 'local' }),
+          { status: 200, headers: { 'X-Nav-Data-Source': 'disabled' } }
+        )
+      )
+    )
+
+    let exportedBlob: Blob | undefined
+    const originalCreateObjectURL = URL.createObjectURL
+    const originalRevokeObjectURL = URL.revokeObjectURL
+    URL.createObjectURL = (blob: Blob | MediaSource) => {
+      exportedBlob = blob as Blob
+      return 'blob:synthetic'
+    }
+    URL.revokeObjectURL = () => {}
+    const anchorClickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {})
+
+    try {
+      const { renderHook } = await import('@testing-library/react')
+      const hook = renderHook(() => useNavStore())
+      await waitFor(() => expect(hook.result.current.syncMode).toBe('local'))
+
+      act(() => {
+        hook.result.current.exportData()
+      })
+      expect(exportedBlob).toBeDefined()
+      expect(exportedBlob!.size).toBeGreaterThan(1024 * 1024)
+
+      const onImportFile = vi.fn()
+      const onImportError = vi.fn()
+      const view = render(
+        <NavHeader
+          title="HomeDB"
+          theme="light"
+          adminMode
+          searchQuery=""
+          onSearchChange={vi.fn()}
+          onThemeChange={vi.fn()}
+          onTitleChange={vi.fn()}
+          onAdminToggle={vi.fn()}
+          onAddGroup={vi.fn()}
+          onExport={vi.fn()}
+          onImportFile={onImportFile}
+          onImportError={onImportError}
+          onOpenBackground={vi.fn()}
+        />
+      )
+
+      const fileInput = view.container.querySelector<HTMLInputElement>('input[type="file"]')!
+      const exportedFile = new File([exportedBlob!], 'mininav-export.json', {
+        type: 'application/json',
+      })
+      fireEvent.change(fileInput, { target: { files: [exportedFile] } })
+
+      await waitFor(() => expect(onImportFile).toHaveBeenCalledTimes(1))
+      expect(onImportError).not.toHaveBeenCalled()
+      expect(onImportFile.mock.calls[0]?.[0]?.groups).toHaveLength(2)
+      expect(onImportFile.mock.calls[0]?.[0]?.groups[0]?.bookmarks).toHaveLength(400)
+
+      // Oversized non-backup file exceeding MAX_BACKUP_FILE_BYTES is still rejected cleanly
+      const oversizedFile = new File(['{}'], 'huge.json', { type: 'application/json' })
+      Object.defineProperty(oversizedFile, 'size', {
+        value: MAX_BACKUP_FILE_BYTES + 1,
+      })
+      fireEvent.change(fileInput, { target: { files: [oversizedFile] } })
+      expect(onImportError).toHaveBeenCalledWith(`文件不能超过 ${MAX_BACKUP_FILE_MB} MB`)
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL
+      URL.revokeObjectURL = originalRevokeObjectURL
+      anchorClickSpy.mockRestore()
+      vi.unstubAllGlobals()
+      localStorage.clear()
+    }
   })
 })

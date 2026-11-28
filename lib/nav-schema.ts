@@ -6,6 +6,16 @@ export const MAX_GROUPS = 100
 export const MAX_BOOKMARKS_PER_GROUP = 500
 export const MAX_ORDER = 100000
 export const MAX_CLICKS = 1000000000
+export const MAX_ID_LENGTH = 100
+export const MAX_NAME_LENGTH = 100
+export const MAX_URL_LENGTH = 2048
+export const MAX_ICON_LENGTH = 2048
+export const MAX_NOTE_LENGTH = 500
+
+// Shared import/export backup size ceiling derived from navDataSchema's maximum valid scale
+// (100 groups × 500 bookmarks with max-length UTF-8 text and 2-space pretty JSON formatting).
+export const MAX_BACKUP_FILE_MB = 384
+export const MAX_BACKUP_FILE_BYTES = MAX_BACKUP_FILE_MB * 1024 * 1024
 
 export const DEFAULT_GROUP_COLORS = [
   '#3B82F6',
@@ -53,12 +63,12 @@ function hasDuplicateIds(groups: ReadonlyArray<{ id: string; bookmarks: Readonly
   return false
 }
 
-const httpUrlSchema = z.string().trim().min(1).max(2048).refine(
+const httpUrlSchema = z.string().trim().min(1).max(MAX_URL_LENGTH).refine(
   (value) => /^https?:\/\//i.test(value) && normalizeHttpUrl(value) !== null,
   '仅支持完整的 HTTP/HTTPS URL'
 )
 
-const iconValueSchema = z.string().trim().min(1).max(2048).refine(
+const iconValueSchema = z.string().trim().min(1).max(MAX_ICON_LENGTH).refine(
   (value) =>
     (value.startsWith('builtin:') && value.length > 'builtin:'.length) ||
     (/^https?:\/\//i.test(value) && normalizeHttpUrl(value) !== null),
@@ -68,12 +78,12 @@ const iconValueSchema = z.string().trim().min(1).max(2048).refine(
 const optionalIconSchema = z.preprocess(emptyToUndefined, iconValueSchema.optional())
 const optionalNoteSchema = z.preprocess(
   emptyToUndefined,
-  z.string().trim().max(500).optional()
+  z.string().trim().max(MAX_NOTE_LENGTH).optional()
 )
 
 export const bookmarkSchema = z.object({
-  id: z.string().trim().min(1).max(100),
-  name: z.string().trim().min(1).max(100),
+  id: z.string().trim().min(1).max(MAX_ID_LENGTH),
+  name: z.string().trim().min(1).max(MAX_NAME_LENGTH),
   url: httpUrlSchema,
   order: z.number().int().nonnegative().max(MAX_ORDER),
   pinned: z.boolean().optional(),
@@ -83,8 +93,8 @@ export const bookmarkSchema = z.object({
 })
 
 export const groupSchema = z.object({
-  id: z.string().trim().min(1).max(100),
-  name: z.string().trim().min(1).max(100),
+  id: z.string().trim().min(1).max(MAX_ID_LENGTH),
+  name: z.string().trim().min(1).max(MAX_NAME_LENGTH),
   order: z.number().int().nonnegative().max(MAX_ORDER),
   color: z.string().regex(/^#[0-9a-f]{6}$/i),
   bookmarks: z.array(bookmarkSchema).max(MAX_BOOKMARKS_PER_GROUP),
@@ -268,8 +278,9 @@ export function salvageNavData(
 
         const trimmedUrl = b.url.trim()
         const normalizedUrl = normalizeHttpUrl(trimmedUrl)
-        if (!normalizedUrl || trimmedUrl.length > 2048) continue
+        if (!normalizedUrl || trimmedUrl.length > MAX_URL_LENGTH) continue
         const finalUrl = /^https?:\/\//i.test(trimmedUrl) ? trimmedUrl : normalizedUrl
+        if (finalUrl.length > MAX_URL_LENGTH) continue
 
         const rawBmName = typeof b.name === 'string' ? b.name.trim() : ''
         const bmName = (rawBmName || fallbackBookmarkName(finalUrl)).slice(0, 100)

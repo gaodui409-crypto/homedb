@@ -1,7 +1,14 @@
 'use client'
 
 import Image from 'next/image'
-import { useRef, useState, type KeyboardEvent, type RefObject } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from 'react'
 import {
   Sun, BookOpen, Moon, Settings, Download, Upload,
   Plus, Check, X, Pencil, MoreVertical, LogOut, Cloud, CloudOff, HardDrive, Menu, Paintbrush,
@@ -9,7 +16,12 @@ import {
 } from 'lucide-react'
 import type { Theme } from '@/lib/types'
 import type { SyncMode } from '@/lib/use-nav-store'
-import { importNavDataSchema, type ImportNavData } from '@/lib/nav-schema'
+import {
+  MAX_BACKUP_FILE_BYTES,
+  MAX_BACKUP_FILE_MB,
+  importNavDataSchema,
+  type ImportNavData,
+} from '@/lib/nav-schema'
 
 interface NavHeaderBaseProps {
   title: string
@@ -178,10 +190,90 @@ export function NavHeader({
   const [draftTitle, setDraftTitle] = useState(title)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [internalMobileSearchOpen, setInternalMobileSearchOpen] = useState(false)
+  const [suppressedOnDesktop, setSuppressedOnDesktop] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return false
+    }
+    return window.matchMedia('(min-width: 768px)').matches
+  })
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const mobileSearchOpen = controlledMobileSearchOpen ?? internalMobileSearchOpen
-  const setMobileSearchOpen = onMobileSearchOpenChange ?? setInternalMobileSearchOpen
+  const rawMobileSearchOpen = controlledMobileSearchOpen ?? internalMobileSearchOpen
+  const mobileSearchOpen = rawMobileSearchOpen && !suppressedOnDesktop
+
+  const openMobileSearch = useCallback(() => {
+    setSuppressedOnDesktop(false)
+    if (onMobileSearchOpenChange) {
+      onMobileSearchOpenChange(true)
+    } else {
+      setInternalMobileSearchOpen(true)
+    }
+  }, [onMobileSearchOpenChange])
+
+  const closeMobileSearch = useCallback(() => {
+    setInternalMobileSearchOpen(false)
+    onMobileSearchOpenChange?.(false)
+  }, [onMobileSearchOpenChange])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const checkWideViewport = () => {
+      if (typeof window.matchMedia === 'function') {
+        return window.matchMedia('(min-width: 768px)').matches
+      }
+      return window.innerWidth >= 768
+    }
+
+    const syncViewport = (wide: boolean) => {
+      setSuppressedOnDesktop(wide)
+      if (wide && rawMobileSearchOpen) {
+        const wasFocused =
+          typeof document !== 'undefined' &&
+          mobileSearchInputRef?.current != null &&
+          document.activeElement === mobileSearchInputRef.current
+        closeMobileSearch()
+        if (wasFocused) {
+          queueMicrotask(() => {
+            searchInputRef?.current?.focus()
+          })
+        }
+      }
+    }
+
+    const handleResize = () => {
+      syncViewport(checkWideViewport())
+    }
+
+    window.addEventListener('resize', handleResize)
+
+    const mql =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia('(min-width: 768px)')
+        : null
+    const handleMediaChange = (event: MediaQueryListEvent) => {
+      syncViewport(event.matches)
+    }
+
+    if (mql) {
+      if (typeof mql.addEventListener === 'function') {
+        mql.addEventListener('change', handleMediaChange)
+      } else if (typeof mql.addListener === 'function') {
+        mql.addListener(handleMediaChange)
+      }
+    }
+
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      if (mql) {
+        if (typeof mql.removeEventListener === 'function') {
+          mql.removeEventListener('change', handleMediaChange)
+        } else if (typeof mql.removeListener === 'function') {
+          mql.removeListener(handleMediaChange)
+        }
+      }
+    }
+  }, [closeMobileSearch, mobileSearchInputRef, rawMobileSearchOpen, searchInputRef])
 
   const matchedThemeIndex = THEMES.findIndex(({ key }) => key === theme)
   const currentThemeIndex = matchedThemeIndex >= 0 ? matchedThemeIndex : 0
@@ -206,12 +298,15 @@ export function NavHeader({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (file.size > 1024 * 1024) {
-      notifyImportError('文件不能超过 1 MB')
+    if (file.size > MAX_BACKUP_FILE_BYTES) {
+      notifyImportError(`文件不能超过 ${MAX_BACKUP_FILE_MB} MB`)
       e.target.value = ''
       return
     }
     const reader = new FileReader()
+    reader.onerror = () => {
+      notifyImportError('读取文件失败')
+    }
     reader.onload = (ev) => {
       let input: unknown
       try {
@@ -259,7 +354,7 @@ export function NavHeader({
                 aria-label="关闭搜索"
                 onClick={() => {
                   onSearchChange('')
-                  setMobileSearchOpen(false)
+                  closeMobileSearch()
                 }}
                 className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground"
               >
@@ -272,7 +367,7 @@ export function NavHeader({
                 autoFocus
                 onChange={onSearchChange}
                 onKeyDown={onSearchKeyDown}
-                onEscape={() => setMobileSearchOpen(false)}
+                onEscape={closeMobileSearch}
               />
             </div>
           ) : (
@@ -364,7 +459,7 @@ export function NavHeader({
               <button
                 type="button"
                 aria-label="打开搜索"
-                onClick={() => setMobileSearchOpen(true)}
+                onClick={openMobileSearch}
                 className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
               >
                 <Search aria-hidden="true" className="size-4" />

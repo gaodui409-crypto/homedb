@@ -3,7 +3,14 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from 'react'
 import { X, ExternalLink, ImageIcon, Paintbrush } from 'lucide-react'
 import { suggestNameFromUrl } from '@/lib/favicon'
-import { normalizeHttpUrl } from '@/lib/nav-schema'
+import {
+  MAX_ICON_LENGTH,
+  MAX_NAME_LENGTH,
+  MAX_NOTE_LENGTH,
+  MAX_URL_LENGTH,
+  bookmarkSchema,
+  normalizeHttpUrl,
+} from '@/lib/nav-schema'
 import { FaviconImage } from '@/components/favicon-image'
 import { BUILTIN_ICONS, BUILTIN_ICON_PREFIX, isBuiltinIcon } from '@/components/builtin-icons'
 import type { Bookmark, Group, BackgroundSetting } from '@/lib/types'
@@ -186,6 +193,8 @@ interface BookmarkModalProps {
   onClose: () => void
 }
 
+type BookmarkErrorField = 'name' | 'url' | 'icon' | 'note' | null
+
 function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProps) {
   const requestClose = useModalDismiss(onClose)
   const isEdit = !!state.bookmark
@@ -195,10 +204,12 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
   const [note, setNote] = useState(state.bookmark?.note ?? '')
   const [selectedGroupId, setSelectedGroupId] = useState(state.groupId)
   const [formError, setFormError] = useState('')
+  const [errorField, setErrorField] = useState<BookmarkErrorField>(null)
   const previewUrl = normalizeHttpUrl(url)
 
   const nameInputRef = useRef<HTMLInputElement>(null)
   const urlInputRef = useRef<HTMLInputElement>(null)
+  const noteInputRef = useRef<HTMLTextAreaElement>(null)
   const iconInputRef = useRef<HTMLInputElement>(null)
 
   const baseId = useId()
@@ -207,6 +218,12 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
   const noteId = `${baseId}-note`
   const iconId = `${baseId}-icon`
   const groupId = `${baseId}-group`
+  const errorId = `${baseId}-error`
+
+  const clearValidationError = () => {
+    setFormError('')
+    setErrorField(null)
+  }
 
   const handleUrlBlur = () => {
     if (!name.trim() && url.trim()) {
@@ -217,14 +234,23 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!name.trim()) {
+    const trimmedName = name.trim()
+    if (!trimmedName) {
       setFormError('请填写名称')
+      setErrorField('name')
       nameInputRef.current?.focus()
       return
     }
     const finalUrl = normalizeHttpUrl(url)
     if (!finalUrl) {
       setFormError('网址格式不对')
+      setErrorField('url')
+      urlInputRef.current?.focus()
+      return
+    }
+    if (finalUrl.length > MAX_URL_LENGTH) {
+      setFormError('网址编码后过长，请精简后再试')
+      setErrorField('url')
       urlInputRef.current?.focus()
       return
     }
@@ -235,11 +261,53 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
       : normalizeHttpUrl(iconValue)
     if (finalIcon === null) {
       setFormError('图标网址格式不对')
+      setErrorField('icon')
+      iconInputRef.current?.focus()
+      return
+    }
+    if (finalIcon.length > MAX_ICON_LENGTH) {
+      setFormError('图标网址编码后过长，请精简后再试')
+      setErrorField('icon')
       iconInputRef.current?.focus()
       return
     }
 
-    onSave(state.groupId, name.trim(), finalUrl, finalIcon, selectedGroupId, note)
+    const parsedBookmark = bookmarkSchema.safeParse({
+      id: state.bookmark?.id ?? 'pending-bookmark',
+      name: trimmedName,
+      url: finalUrl,
+      order: state.bookmark?.order ?? 0,
+      pinned: state.bookmark?.pinned,
+      icon: finalIcon || undefined,
+      note: note.trim() || undefined,
+      clicks: state.bookmark?.clicks,
+    })
+    if (!parsedBookmark.success) {
+      const firstIssueField = parsedBookmark.error.issues[0]?.path[0]
+      if (firstIssueField === 'name') {
+        setFormError(`名称不能超过 ${MAX_NAME_LENGTH} 字`)
+        setErrorField('name')
+        nameInputRef.current?.focus()
+      } else if (firstIssueField === 'url') {
+        setFormError('网址格式不对或编码后过长')
+        setErrorField('url')
+        urlInputRef.current?.focus()
+      } else if (firstIssueField === 'icon') {
+        setFormError('图标网址格式不对或编码后过长')
+        setErrorField('icon')
+        iconInputRef.current?.focus()
+      } else if (firstIssueField === 'note') {
+        setFormError(`备注不能超过 ${MAX_NOTE_LENGTH} 字`)
+        setErrorField('note')
+        noteInputRef.current?.focus()
+      } else {
+        setFormError(parsedBookmark.error.issues[0]?.message || '书签信息格式不对')
+        setErrorField(null)
+      }
+      return
+    }
+
+    onSave(state.groupId, parsedBookmark.data.name, parsedBookmark.data.url, finalIcon, selectedGroupId, note)
     requestClose()
   }
 
@@ -286,12 +354,14 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
           className={inputCls}
           type="text"
           value={name}
+          aria-invalid={errorField === 'name' ? 'true' : undefined}
+          aria-describedby={errorField === 'name' && formError ? errorId : undefined}
           onChange={(e) => {
             setName(e.target.value)
-            setFormError('')
+            clearValidationError()
           }}
           placeholder="例：GitHub"
-          maxLength={100}
+          maxLength={MAX_NAME_LENGTH}
           required
           autoFocus
         />
@@ -304,13 +374,18 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
           className={inputCls}
           type="text"
           value={url}
+          autoCorrect="off"
+          autoCapitalize="none"
+          spellCheck={false}
+          aria-invalid={errorField === 'url' ? 'true' : undefined}
+          aria-describedby={errorField === 'url' && formError ? errorId : undefined}
           onChange={(e) => {
             setUrl(e.target.value)
-            setFormError('')
+            clearValidationError()
           }}
           onBlur={handleUrlBlur}
           placeholder="https://..."
-          maxLength={2048}
+          maxLength={MAX_URL_LENGTH}
           required
         />
       </FormField>
@@ -318,16 +393,22 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
       <FormField
         label="备注（选填）"
         htmlFor={noteId}
-        hint={note.length > 400 ? `${note.length}/500` : undefined}
+        hint={note.length > 400 ? `${note.length}/${MAX_NOTE_LENGTH}` : undefined}
       >
         <textarea
+          ref={noteInputRef}
           id={noteId}
           className={`${inputCls} resize-none`}
           rows={2}
           value={note}
-          onChange={(e) => setNote(e.target.value)}
+          aria-invalid={errorField === 'note' ? 'true' : undefined}
+          aria-describedby={errorField === 'note' && formError ? errorId : undefined}
+          onChange={(e) => {
+            setNote(e.target.value)
+            clearValidationError()
+          }}
           placeholder="例：内网需连 VPN / 工作邮箱登录"
-          maxLength={500}
+          maxLength={MAX_NOTE_LENGTH}
         />
       </FormField>
 
@@ -343,7 +424,7 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
                   type="button"
                   onClick={() => {
                     setIcon(selected ? '' : value)
-                    setFormError('')
+                    clearValidationError()
                   }}
                   className={`aspect-square flex items-center justify-center rounded-lg border transition-colors ${
                     selected
@@ -365,12 +446,17 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
             className={inputCls}
             type="text"
             value={isBuiltinIcon(icon) ? '' : icon}
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            aria-invalid={errorField === 'icon' ? 'true' : undefined}
+            aria-describedby={errorField === 'icon' && formError ? errorId : undefined}
             onChange={(e) => {
               setIcon(e.target.value)
-              setFormError('')
+              clearValidationError()
             }}
             placeholder="粘贴图标网址（留空自动获取）"
-            maxLength={2048}
+            maxLength={MAX_ICON_LENGTH}
           />
         </div>
       </FormField>
@@ -390,7 +476,7 @@ function BookmarkModalBody({ state, groups, onSave, onClose }: BookmarkModalProp
         </select>
       </FormField>
 
-      {formError && <p role="alert" className="text-sm text-destructive">{formError}</p>}
+      {formError && <p id={errorId} role="alert" className="text-sm text-destructive">{formError}</p>}
 
       <div className="flex gap-2 pt-1">
         <button

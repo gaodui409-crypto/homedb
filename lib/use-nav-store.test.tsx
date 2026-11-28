@@ -2,10 +2,58 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { GET, POST } from '@/app/api/data/route'
 import { CORRUPT_BACKUP_KEY, STORAGE_KEY, TOKEN_KEY } from './storage'
 import { PENDING_SYNC_KEY } from './sync-policy'
 import { useNavStore } from './use-nav-store'
 import type { Group } from './types'
+
+const syntheticBlob = vi.hoisted(() => ({
+  raw: null as string | null,
+  etagCounter: 0,
+  etag: '',
+  writes: [] as Array<{ groups: Group[]; etag: string }>,
+}))
+
+vi.mock('@vercel/blob', () => ({
+  get: vi.fn(async () => {
+    if (syntheticBlob.raw === null) return null
+    return {
+      statusCode: 200,
+      stream: new Response(syntheticBlob.raw).body,
+      blob: { etag: syntheticBlob.etag },
+    }
+  }),
+  put: vi.fn(
+    async (
+      _key: string,
+      value: string,
+      options?: { allowOverwrite?: boolean; ifMatch?: string }
+    ) => {
+      if (options?.ifMatch) {
+        if (syntheticBlob.raw === null || syntheticBlob.etag !== options.ifMatch) {
+          throw Object.assign(
+            new Error('Vercel Blob: Precondition failed: ETag mismatch.'),
+            { name: 'BlobPreconditionFailedError' }
+          )
+        }
+      } else if (options?.allowOverwrite === false && syntheticBlob.raw !== null) {
+        throw new Error('Vercel Blob: This blob already exists')
+      }
+      syntheticBlob.etagCounter += 1
+      syntheticBlob.etag = `etag-v${syntheticBlob.etagCounter}`
+      syntheticBlob.raw = value
+      syntheticBlob.writes.push({
+        groups: (JSON.parse(value) as { groups: Group[] }).groups,
+        etag: syntheticBlob.etag,
+      })
+      return {
+        url: 'https://synthetic.invalid/nav-data.json',
+        etag: syntheticBlob.etag,
+      }
+    }
+  ),
+}))
 
 const sampleGroups: Group[] = [
   {
@@ -50,6 +98,7 @@ describe('useNavStore', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
   })
 
   it('maintains manual order without auto-reordering on clicks or pins, and avoids order collisions after deletions', async () => {
@@ -529,5 +578,151 @@ describe('useNavStore', () => {
       result.current.setAdminMode(true)
     })
     expect(result.current.adminMode).toBe(true)
+  })
+
+  it('HDB-001: stale page click or collapse merges onto newer cloud data via conditional ETag write instead of deleting remote bookmarks', async () => {
+    localStorage.clear()
+    syntheticBlob.etagCounter = 1
+    syntheticBlob.etag = 'etag-v1'
+    syntheticBlob.raw = JSON.stringify({
+      groups: [
+        {
+          id: 'group',
+          name: 'Synthetic group',
+          order: 0,
+          color: '#123456',
+          bookmarks: [
+            { id: 'original', name: 'Original', url: 'https://example.test/', order: 0 },
+          ],
+        },
+      ],
+    })
+    syntheticBlob.writes = []
+
+    vi.stubEnv('NAV_PASSWORD', '')
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'synthetic-mock-token-no-network')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, options: RequestInit = {}) => {
+        const request = new Request('http://review.test/api/data', options)
+        return options.method === 'POST'
+          ? POST(request as never)
+          : GET(request as never)
+      })
+    )
+
+    const first = renderHook(() => useNavStore())
+    await waitFor(() => expect(first.result.current.syncMode).toBe('cloud'))
+
+    const second = renderHook(() => useNavStore())
+    await waitFor(() => expect(second.result.current.syncMode).toBe('cloud'))
+
+    act(() => {
+      second.result.current.addBookmark(
+        'group',
+        'Added elsewhere',
+        'https://new.example.test/'
+      )
+    })
+    await waitFor(() => expect(syntheticBlob.writes).toHaveLength(1))
+    const remoteId = syntheticBlob.writes[0].groups[0].bookmarks[1].id
+
+    // Stale first page triggers recordClick and toggleGroupCollapsed
+    act(() => {
+      first.result.current.recordClick('original')
+      first.result.current.toggleGroupCollapsed('group')
+    })
+
+    await waitFor(() => expect(syntheticBlob.writes).toHaveLength(2))
+
+    const latestCloudGroup = (JSON.parse(syntheticBlob.raw!) as { groups: Group[] })
+      .groups[0]
+    expect(latestCloudGroup.bookmarks).toHaveLength(2)
+    expect(latestCloudGroup.bookmarks.some((item) => item.id === remoteId)).toBe(true)
+    expect(
+      latestCloudGroup.bookmarks.find((item) => item.id === 'original')?.clicks
+    ).toBe(1)
+    expect(latestCloudGroup.collapsed).toBe(true)
+
+    expect(first.result.current.groups[0].bookmarks).toHaveLength(2)
+    expect(first.result.current.syncError).toBeNull()
+  })
+
+  it('HDB-001: structural edit conflict refuses to overwrite newer cloud data and notifies the user', async () => {
+    localStorage.clear()
+    syntheticBlob.etagCounter = 1
+    syntheticBlob.etag = 'etag-v1'
+    syntheticBlob.raw = JSON.stringify({
+      groups: [
+        {
+          id: 'group',
+          name: 'Synthetic group',
+          order: 0,
+          color: '#123456',
+          bookmarks: [
+            { id: 'original', name: 'Original', url: 'https://example.test/', order: 0 },
+          ],
+        },
+      ],
+    })
+    syntheticBlob.writes = []
+
+    vi.stubEnv('NAV_PASSWORD', '')
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'synthetic-mock-token-no-network')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, options: RequestInit = {}) => {
+        const request = new Request('http://review.test/api/data', options)
+        return options.method === 'POST'
+          ? POST(request as never)
+          : GET(request as never)
+      })
+    )
+
+    const first = renderHook(() => useNavStore())
+    await waitFor(() => expect(first.result.current.syncMode).toBe('cloud'))
+
+    const second = renderHook(() => useNavStore())
+    await waitFor(() => expect(second.result.current.syncMode).toBe('cloud'))
+
+    act(() => {
+      second.result.current.addBookmark(
+        'group',
+        'Remote bookmark',
+        'https://remote.example.test/'
+      )
+    })
+    await waitFor(() => expect(syntheticBlob.writes).toHaveLength(1))
+    const remoteBookmarkId = syntheticBlob.writes[0].groups[0].bookmarks[1].id
+
+    // Stale first page performs a structural edit
+    act(() => {
+      first.result.current.addBookmark(
+        'group',
+        'Conflicting local bookmark',
+        'https://local.example.test/'
+      )
+    })
+
+    await waitFor(() =>
+      expect(first.result.current.syncError).toBe('云端已有新修改，请先导出备份再刷新')
+    )
+    expect(first.result.current.syncNotice).toEqual({
+      message: '云端已有新修改，请先导出备份再刷新',
+      retryable: false,
+    })
+
+    // Cloud retains second page's bookmark untouched; only 1 write succeeded
+    expect(syntheticBlob.writes).toHaveLength(1)
+    const cloudBookmarks = (JSON.parse(syntheticBlob.raw!) as { groups: Group[] })
+      .groups[0].bookmarks
+    expect(cloudBookmarks.map((b) => b.id)).toEqual(['original', remoteBookmarkId])
+
+    // First page still keeps its local edit in memory so the user can export backup
+    expect(
+      first.result.current.groups[0].bookmarks.some(
+        (b) => b.name === 'Conflicting local bookmark'
+      )
+    ).toBe(true)
   })
 })
